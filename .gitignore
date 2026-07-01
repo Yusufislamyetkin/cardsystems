@@ -1,0 +1,16 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+
+## Visual Studio
+.vs/
+
+## SQLite dev databases (generated at runtime)
+*.db
+*.db-shm
+*.db-wal
+
+## Misc
+run_output.txt

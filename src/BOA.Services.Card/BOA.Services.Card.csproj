@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\BOA.Common.Contracts\BOA.Common.Contracts.csproj" />
+    <ProjectReference Include="..\BOA.Data\BOA.Data.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- IHttpContextAccessor için (REST çağrılarında güvenlik token'ı doğrulamak amacıyla) -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Test projesinin Luhn/BIN/asgari ödeme gibi saf iş kuralı fonksiyonlarını, PCI-DSS gereği
+         hiçbir zaman dışa açılmayan ham PAN'ı sızdırmadan doğrudan test edebilmesi için. -->
+    <InternalsVisibleTo Include="BOA.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

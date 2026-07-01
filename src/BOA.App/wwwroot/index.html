@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emlak Katılım - BOA Temel Kart Operasyonları Portalı</title>
+    <!-- Google Fonts üzerinden Outfit ve Inter yazı tiplerini yüklüyoruz -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome kütüphanesini ikonlar için ekliyoruz -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Özel CSS dosyamız -->
+    <link rel="stylesheet" href="css/index.css">
+</head>
+<body>
+
+    <!-- ÜST MENÜ (HEADER) -->
+    <header class="header">
+        <div class="header-logo">
+            <!-- Emlak Katılım'ın kurumsal renklerinde modern logo simülasyonu -->
+            <div class="logo-icon"><i class="fa-solid fa-building-columns"></i></div>
+            <div class="logo-text">
+                <h1>emlak katılım</h1>
+                <span>BOA Core Banking Framework Portal</span>
+            </div>
+        </div>
+        <div class="header-status">
+            <div class="status-indicator online"></div>
+            <span>WCF Services Online</span>
+        </div>
+    </header>
+
+    <!-- ANA İÇERİK ALANI -->
+    <main class="main-container">
+
+        <!-- 1. KISIM: İSTATİSTİK ÖZET KARTLARI -->
+        <section class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon purple"><i class="fa-solid fa-credit-card"></i></div>
+                <div class="stat-info">
+                    <h3 id="stat-total-cards">0</h3>
+                    <p>Toplam Kart</p>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon green"><i class="fa-solid fa-wallet"></i></div>
+                <div class="stat-info">
+                    <h3 id="stat-debit-cards">0</h3>
+                    <p>Banka Kartı (Debit)</p>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon gold"><i class="fa-solid fa-money-check-dollar"></i></div>
+                <div class="stat-info">
+                    <h3 id="stat-credit-cards">0</h3>
+                    <p>Kredi Kartı</p>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon blue"><i class="fa-solid fa-circle-check"></i></div>
+                <div class="stat-info">
+                    <h3 id="stat-active-cards">0</h3>
+                    <p>Aktif Kartlar</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- 2. KISIM: KARTLAR VE DETAY PANELDEN OLUŞAN ÇİFT SÜTUN YAPI -->
+        <div class="content-grid">
+            
+            <!-- SOL SÜTUN: KART LİSTELEME VE FİLTRELEME -->
+            <section class="card-list-section">
+                <div class="section-header">
+                    <h2>Kayıtlı Kartlar</h2>
+                    <button class="btn btn-primary btn-sm" id="btn-open-create-modal">
+                        <i class="fa-solid fa-plus"></i> Yeni Kart Tanımla
+                    </button>
+                </div>
+
+                <!-- Filtreleme Çubuğu -->
+                <div class="filter-bar">
+                    <div class="filter-input-wrapper">
+                        <i class="fa-solid fa-magnifying-glass"></i>
+                        <input type="text" id="filter-holder" placeholder="Kart Sahibi Adı...">
+                    </div>
+                    <select id="filter-type">
+                        <option value="">Kart Tipi (Tümü)</option>
+                        <option value="1">Banka Kartı (Debit)</option>
+                        <option value="2">Kredi Kartı</option>
+                    </select>
+                    <select id="filter-status">
+                        <option value="">Durum (Tümü)</option>
+                        <option value="1">Aktif</option>
+                        <option value="2">Bloke</option>
+                        <option value="3">İptal</option>
+                    </select>
+                </div>
+
+                <!-- Dinamik Kart Listesi (JS ile Doldurulacak) -->
+                <div class="card-list-wrapper" id="card-list">
+                    <!-- Kartlar buraya yüklenecek -->
+                    <div class="loading-state">
+                        <i class="fa-solid fa-circle-notch fa-spin"></i>
+                        <p>Kartlar Yükleniyor...</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SAĞ SÜTUN: SEÇİLİ KART DETAYLARI VE OPERASYONLAR -->
+            <section class="card-detail-section" id="card-details-panel">
+                <div class="no-selection-state" id="no-selection-msg">
+                    <i class="fa-solid fa-hand-pointer"></i>
+                    <h3>Detayları Görüntülemek İçin Bir Kart Seçin</h3>
+                    <p>Kart limit güncelleme, blokaj işlemleri ve hesap hareketleri seçtiğiniz kart üzerinden gerçekleştirilecektir.</p>
+                </div>
+
+                <!-- Kart Seçildiğinde Görünecek Panel -->
+                <div class="details-wrapper hidden" id="details-content">
+                    
+                    <!-- Görsel Plastik Kart Mockup -->
+                    <div class="plastic-card-container">
+                        <div class="plastic-card" id="visual-card">
+                            <div class="card-glass-glow"></div>
+                            <div class="card-front">
+                                <div class="card-chip-row">
+                                    <div class="card-chip"></div>
+                                    <span class="bank-name">emlak katılım</span>
+                                </div>
+                                <div class="card-number" id="visual-card-number">4355 20** **** 1234</div>
+                                <div class="card-info-row">
+                                    <div class="card-holder">
+                                        <span>KART SAHİBİ</span>
+                                        <p id="visual-card-holder">YUSUF BORA</p>
+                                    </div>
+                                    <div class="card-expiry">
+                                        <span>SON KUL.</span>
+                                        <p id="visual-card-expiry">12/31</p>
+                                    </div>
+                                    <div class="card-brand" id="visual-card-brand">
+                                        <i class="fa-brands fa-cc-visa"></i>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Operasyonel İşlem Butonları -->
+                    <div class="action-grid">
+                        <!-- Limit Güncelleme Butonu -->
+                        <button class="action-card" id="btn-open-limit-modal">
+                            <div class="action-icon orange"><i class="fa-solid fa-arrows-left-right-to-line"></i></div>
+                            <h4>Limit Güncelle</h4>
+                            <p>Kart harcama limitini düzenle</p>
+                        </button>
+                        <!-- Blokaj / Durum Değiştirme Butonu -->
+                        <button class="action-card" id="btn-open-status-modal">
+                            <div class="action-icon red" id="action-status-icon"><i class="fa-solid fa-ban"></i></div>
+                            <h4 id="action-status-title">Durum Değiştir</h4>
+                            <p id="action-status-desc">Kayıp/çalıntı veya blokaj işlemlerini yap</p>
+                        </button>
+                        <!-- İşlem Simüle Et Butonu -->
+                        <button class="action-card" id="btn-open-trans-modal">
+                            <div class="action-icon green"><i class="fa-solid fa-cash-register"></i></div>
+                            <h4>İşlem Simüle Et</h4>
+                            <p>Alışveriş, ATM Çekim/Yatırım</p>
+                        </button>
+                        <!-- Provizyon Alma Butonu -->
+                        <button class="action-card" id="btn-open-authorize-modal">
+                            <div class="action-icon purple"><i class="fa-solid fa-lock"></i></div>
+                            <h4>Provizyon Al</h4>
+                            <p>Authorize → Capture/Void akışı</p>
+                        </button>
+                    </div>
+
+                    <!-- Kart Finansal Durumu -->
+                    <div class="financial-details">
+                        <div class="fin-row">
+                            <span>Toplam Kart Limiti:</span>
+                            <strong id="detail-card-limit">₺0.00</strong>
+                        </div>
+                        <div class="fin-row">
+                            <span id="detail-balance-label">Kullanılabilir Bakiye:</span>
+                            <strong id="detail-card-balance">₺0.00</strong>
+                        </div>
+                        <div class="fin-row">
+                            <span>Kart Tipi:</span>
+                            <span class="badge" id="detail-card-type">Banka Kartı</span>
+                        </div>
+                        <div class="fin-row">
+                            <span>Kart Durumu:</span>
+                            <span class="badge" id="detail-card-status">Aktif</span>
+                        </div>
+                    </div>
+
+                    <!-- Hesap / Kart Hareketleri Listesi -->
+                    <div class="transactions-container">
+                        <h3>Kart Hareketleri (Ekstre)</h3>
+                        <div class="trans-list" id="transaction-list">
+                            <!-- Hareketler buraya dinamik eklenecek -->
+                        </div>
+                    </div>
+
+                </div>
+            </section>
+        </div>
+
+        <!-- 3. KISIM: GERÇEK ZAMANLI WCF & SQL LOG TRACER PANELS (BOA ANATOMİSİ) -->
+        <section class="tracer-section">
+            <div class="section-header">
+                <h2><i class="fa-solid fa-bug"></i> BOA WCF & SQL Canlı İstek İzleyici (Tracer)</h2>
+                <div>
+                    <button class="btn btn-secondary btn-sm" id="btn-run-eod-batch">
+                        <i class="fa-solid fa-moon"></i> Gün Sonu Batch Çalıştır
+                    </button>
+                    <button class="btn btn-secondary btn-sm" id="btn-clear-logs">
+                        <i class="fa-solid fa-trash-can"></i> Logları Temizle
+                    </button>
+                </div>
+            </div>
+            
+            <div class="tracer-grid">
+                
+                <!-- SOL LOG PANELI: WCF SOAP BINDINGS -->
+                <div class="tracer-panel">
+                    <div class="panel-title">
+                        <i class="fa-solid fa-envelope"></i> 1. WCF SOAP Servis Katmanı (XML İstekleri)
+                        <span class="badge wcf-badge">BasicHttpBinding</span>
+                    </div>
+                    <div class="log-output code-font" id="wcf-log-output">
+                        <div class="log-placeholder">İşlem yapıldığında WCF SOAP istek ve yanıt XML paketleri burada görüntülenecektir...</div>
+                    </div>
+                </div>
+
+                <!-- SAĞ LOG PANELI: SQL STORED PROCEDURE EXECUTION -->
+                <div class="tracer-panel">
+                    <div class="panel-title">
+                        <i class="fa-solid fa-database"></i> 2. Veritabanı Stored Procedure Katmanı (PL/pgSQL & Oracle)
+                        <span class="badge sql-badge">ADO.NET Execution</span>
+                    </div>
+                    <div class="log-output code-font" id="sql-log-output">
+                        <div class="log-placeholder">Veritabanında tetiklenen Stored Procedure parametre eşleşmeleri ve süreleri burada görüntülenecektir...</div>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+    </main>
+
+    <!-- =====================================================================================
+         MODAL PENCERELER (POP-UPS)
+         ===================================================================================== -->
+
+    <!-- MODAL 1: YENİ KART TANIMLAMA EKRANI -->
+    <div class="modal" id="modal-create-card">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-plus-circle"></i> Yeni Kart Tanımlama (BOA Servis)</h3>
+                <span class="modal-close" data-modal="modal-create-card">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="form-create-card">
+                    <div class="form-group">
+                        <label for="input-holder">Kart Sahibi Adı Soyadı</label>
+                        <input type="text" id="input-holder" required placeholder="Örn: YUSUF BORA" uppercase>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-national-id">Kart Sahibi T.C. Kimlik No</label>
+                        <input type="text" id="input-national-id" required maxlength="11" placeholder="Örn: 12345678901">
+                    </div>
+                    <div class="form-group">
+                        <label for="select-card-type">Kart Türü</label>
+                        <select id="select-card-type" required>
+                            <option value="1">Banka Kartı (Debit Card)</option>
+                            <option value="2">Kredi Kartı (Credit Card)</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="limit-group">
+                        <label for="input-limit">Kart Tanımlı Toplam Limit (₺)</label>
+                        <input type="number" id="input-limit" value="15000" min="0" required>
+                    </div>
+                    <div class="form-group" id="balance-group">
+                        <label for="input-balance">Vadesiz Hesap Başlangıç Bakiyesi (₺)</label>
+                        <input type="number" id="input-balance" value="5000" min="0" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-card-pin">Kart Şifresi (PIN)</label>
+                        <input type="password" id="input-card-pin" maxlength="4" pattern="[0-9]{4}" value="1234" required>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" data-modal="modal-create-card">Vazgeç</button>
+                        <button type="submit" class="btn btn-primary">Kart Oluştur (SOAP Fırlat)</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 2: LİMİT GÜNCELLEME EKRANI -->
+    <div class="modal" id="modal-limit">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-sliders"></i> Kart Limit Güncelleme</h3>
+                <span class="modal-close" data-modal="modal-limit">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="form-update-limit">
+                    <input type="hidden" id="limit-card-id">
+                    <div class="form-group">
+                        <label>Kart Sahibi:</label>
+                        <p class="form-static-text" id="limit-card-holder">YUSUF BORA</p>
+                    </div>
+                    <div class="form-group">
+                        <label>Mevcut Limit:</label>
+                        <p class="form-static-text" id="limit-card-current">₺15,000.00</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-new-limit">Yeni Tanımlanacak Limit (₺)</label>
+                        <input type="number" id="input-new-limit" min="0" step="100" required>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" data-modal="modal-limit">Kapat</button>
+                        <button type="submit" class="btn btn-primary">Limiti Kaydet (SP_UPDATE_LIMIT)</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 3: DURUM DEĞİŞİKLİĞİ VE BLOKAJ EKRANI -->
+    <div class="modal" id="modal-status">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-shield"></i> Kart Blokaj ve Durum Yönetimi</h3>
+                <span class="modal-close" data-modal="modal-status">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="form-update-status">
+                    <input type="hidden" id="status-card-id">
+                    <div class="form-group">
+                        <label>Kart Numarası:</label>
+                        <p class="form-static-text" id="status-card-number">4355 20** **** 1234</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="select-new-status">Yeni Durum</label>
+                        <select id="select-new-status" required>
+                            <option value="1">Aktif (Kullanıma Açık)</option>
+                            <option value="2">Bloke (Geçici Olarak Kapalı)</option>
+                            <option value="3">İptal (Kalıcı Olarak Kapalı)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-status-reason">İşlem Gerekçesi (Reason)</label>
+                        <input type="text" id="input-status-reason" required placeholder="Örn: Kayıp Çalıntı Bildirimi veya Müşteri Talebi">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" data-modal="modal-status">Kapat</button>
+                        <button type="submit" class="btn btn-primary">Durumu Kaydet (SP_SET_STATUS)</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 5: PROVİZYON ALMA EKRANI (AUTHORIZE) -->
+    <div class="modal" id="modal-authorize">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-lock"></i> Provizyon Al (Authorize)</h3>
+                <span class="modal-close" data-modal="modal-authorize">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="form-authorize">
+                    <input type="hidden" id="auth-card-id">
+                    <div class="form-group">
+                        <label>İşlem Yapılacak Kart:</label>
+                        <p class="form-static-text" id="auth-card-holder">YUSUF BORA</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-auth-amount">Provizyon Tutarı (₺)</label>
+                        <input type="number" id="input-auth-amount" min="1" step="0.5" value="150" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-auth-pin">Kart Şifresi (PIN)</label>
+                        <input type="password" id="input-auth-pin" maxlength="4" value="1234" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-auth-merchant">Üye İş Yeri</label>
+                        <input type="text" id="input-auth-merchant" value="MIGROS-1234">
+                    </div>
+                    <div class="form-group">
+                        <label for="input-auth-mcc">MCC</label>
+                        <input type="text" id="input-auth-mcc" value="5411">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" data-modal="modal-authorize">İptal</button>
+                        <button type="submit" class="btn btn-primary">Provizyon Al (Authorize)</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 4: İŞLEM SİMÜLASYON EKRANI (POS / ATM) -->
+    <div class="modal" id="modal-transaction">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-cash-register"></i> Kart İşlem Simülatörü</h3>
+                <span class="modal-close" data-modal="modal-transaction">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="form-create-transaction">
+                    <input type="hidden" id="trans-card-id">
+                    <div class="form-group">
+                        <label>İşlem Yapılacak Kart:</label>
+                        <p class="form-static-text" id="trans-card-holder">YUSUF BORA</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="select-trans-type">İşlem Türü</label>
+                        <select id="select-trans-type" required>
+                            <option value="1">Alışveriş (POS Harcaması) [-]</option>
+                            <option value="2">ATM Para Çekme [-]</option>
+                            <option value="3">Karta/Hesaba Para Yatırma [+]</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-trans-amount">İşlem Tutarı (₺)</label>
+                        <input type="number" id="input-trans-amount" min="1" step="0.5" value="100" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-trans-desc">İşlem Açıklaması</label>
+                        <input type="text" id="input-trans-desc" required placeholder="Örn: Market Alışverişi, Kira Yatırma vb.">
+                    </div>
+                    <div class="form-group">
+                        <label for="input-trans-pin">Kart Şifresi (PIN) — Alışveriş/ATM Çekim için zorunlu</label>
+                        <input type="password" id="input-trans-pin" maxlength="4" value="1234">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" data-modal="modal-transaction">İptal</button>
+                        <button type="submit" class="btn btn-primary">İşlemi Gönder (SP_CREATE_TRANSACTION)</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- AJAX ve UI işlemleri için Javascript dosyamız -->
+    <script src="js/app.js"></script>
+</body>
+</html>
