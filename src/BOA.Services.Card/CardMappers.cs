@@ -18,7 +18,10 @@ internal static class CardMappers
             CardId = Convert.ToInt32(row["card_id"]),
             CardNumber = row["card_number"].ToString() ?? string.Empty,
             CardHolderName = row["card_holder_name"].ToString() ?? string.Empty,
+            EmbossName = row.Table.Columns.Contains("emboss_name") && row["emboss_name"] != DBNull.Value ? row["emboss_name"].ToString() ?? string.Empty : string.Empty,
             CardType = (CardType)Convert.ToInt32(row["card_type"]),
+            CardBrand = row.Table.Columns.Contains("card_brand") ? (CardBrand)Convert.ToInt32(row["card_brand"]) : CardBrand.Troy,
+            CardProduct = row.Table.Columns.Contains("card_product") ? (CardProduct)Convert.ToInt32(row["card_product"]) : CardProduct.Classic,
             ExpiryDate = Convert.ToDateTime(row["expiry_date"]),
             Status = (CardStatus)Convert.ToInt32(row["status"]),
             CardLimit = Convert.ToDecimal(row["card_limit"]),
@@ -27,7 +30,11 @@ internal static class CardMappers
             CustomerId = row.Table.Columns.Contains("customer_id") ? Convert.ToInt32(row["customer_id"]) : 0,
             BankAccountId = row.Table.Columns.Contains("bank_account_id") ? Convert.ToInt32(row["bank_account_id"]) : 0,
             NationalId = row.Table.Columns.Contains("national_id") ? (row["national_id"].ToString() ?? string.Empty) : string.Empty,
-            PaycoreReference = row.Table.Columns.Contains("paycore_reference") && row["paycore_reference"] != DBNull.Value ? row["paycore_reference"].ToString() : null
+            PaycoreReference = row.Table.Columns.Contains("paycore_reference") && row["paycore_reference"] != DBNull.Value ? row["paycore_reference"].ToString() : null,
+            Cvv2Hash = row.Table.Columns.Contains("cvv2_hash") && row["cvv2_hash"] != DBNull.Value ? row["cvv2_hash"].ToString() : null,
+            CvvHash = row.Table.Columns.Contains("cvv_hash") && row["cvv_hash"] != DBNull.Value ? row["cvv_hash"].ToString() : null,
+            ServiceCode = row.Table.Columns.Contains("service_code") ? (row["service_code"].ToString() ?? "201") : "201",
+            Track2Data = row.Table.Columns.Contains("track2_data") && row["track2_data"] != DBNull.Value ? row["track2_data"].ToString() : null
         };
     }
 

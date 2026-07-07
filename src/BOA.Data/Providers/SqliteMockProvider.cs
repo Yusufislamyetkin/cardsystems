@@ -77,7 +77,9 @@ public class SqliteMockProvider : IBoaDbProvider
                 CREATE TABLE IF NOT EXISTS boa_bin_table (
                     bin_code TEXT PRIMARY KEY,
                     card_type INTEGER NOT NULL,          -- 1: Debit, 2: Credit
-                    card_brand TEXT NOT NULL
+                    card_brand INTEGER NOT NULL,         -- 1: Visa, 2: Mastercard, 3: Troy, 4: Amex
+                    card_product INTEGER NOT NULL DEFAULT 1, -- 1: Classic, 2: Gold, 3: Platinum, 4: Business, 5: Premium
+                    issuer_name TEXT NOT NULL DEFAULT 'BOA Bank'
                 );";
 
             // 2. Kartlar Tablosu (Maskeli PAN, Şifreli PAN, PIN Block, GL Hesap referansı barındırır)
@@ -88,7 +90,10 @@ public class SqliteMockProvider : IBoaDbProvider
                     encrypted_pan TEXT NOT NULL,                 -- Şifreli Kart No
                     pin_hash TEXT NULL,                         -- HSM PIN Block
                     card_holder_name TEXT NOT NULL,
+                    emboss_name TEXT NOT NULL DEFAULT '',        -- EMBOSS formatında kart sahibi adı (max 21 karakter)
                     card_type INTEGER NOT NULL,
+                    card_brand INTEGER NOT NULL DEFAULT 3,      -- 1: Visa, 2: Mastercard, 3: Troy, 4: Amex
+                    card_product INTEGER NOT NULL DEFAULT 1,    -- 1: Classic, 2: Gold, 3: Platinum, 4: Business, 5: Premium
                     expiry_date TEXT NOT NULL,
                     status INTEGER NOT NULL DEFAULT 1,
                     card_limit REAL NOT NULL DEFAULT 0.00,
@@ -97,6 +102,10 @@ public class SqliteMockProvider : IBoaDbProvider
                     customer_id INTEGER NOT NULL,               -- Kart hamilinin müşteri kaydı
                     bank_account_id INTEGER NOT NULL,           -- Bağlı vadesiz/kredi hesabı
                     paycore_reference TEXT NULL,                -- Dış kart işleme sağlayıcısı (PayCore) tarafındaki karşılık gelen referans
+                    cvv2_hash TEXT NULL,                        -- CVV2 hash (PCI-DSS: asla düz metin saklanmaz)
+                    cvv_hash TEXT NULL,                         -- CVV (manyetik şerit) hash
+                    service_code TEXT NOT NULL DEFAULT '201',   -- EMV Service Code
+                    track2_data TEXT NULL,                      -- Track2 eşdeğer verisi
                     created_date TEXT NOT NULL,
                     FOREIGN KEY(account_id) REFERENCES boa_accounts(account_id),
                     FOREIGN KEY(customer_id) REFERENCES boa_customers(customer_id),
@@ -245,7 +254,15 @@ public class SqliteMockProvider : IBoaDbProvider
             using (var cmd = new SqliteCommand(createCardApplicationsTable, connection)) { cmd.ExecuteNonQuery(); }
 
             using (var cmd = new SqliteCommand(
-                "INSERT OR IGNORE INTO boa_bin_table (bin_code, card_type, card_brand) VALUES ('435520', 1, 'VISA'), ('543789', 2, 'MASTERCARD');", connection))
+                "INSERT OR IGNORE INTO boa_bin_table (bin_code, card_type, card_brand, card_product) VALUES " +
+                "('435520', 1, 1, 1), " +     // Debit - Visa - Classic
+                "('435521', 1, 1, 2), " +     // Debit - Visa - Gold
+                "('543789', 2, 2, 1), " +     // Credit - Mastercard - Classic
+                "('543790', 2, 2, 2), " +     // Credit - Mastercard - Gold
+                "('979201', 2, 3, 1), " +     // Credit - Troy - Classic
+                "('979202', 2, 3, 3), " +     // Credit - Troy - Platinum
+                "('979203', 1, 3, 1);",       // Debit - Troy - Classic
+                connection))
             {
                 cmd.ExecuteNonQuery();
             }
@@ -291,6 +308,13 @@ public class SqliteMockProvider : IBoaDbProvider
             // çalışabilmesi için eksik kolonları burada tamamlıyoruz (SQLite'ta "ADD COLUMN IF NOT EXISTS" yok).
             TryAddColumn(connection, "boa_cards", "paycore_reference", "TEXT NULL");
             TryAddColumn(connection, "boa_authorizations", "paycore_auth_reference", "TEXT NULL");
+            TryAddColumn(connection, "boa_cards", "emboss_name", "TEXT NOT NULL DEFAULT ''");
+            TryAddColumn(connection, "boa_cards", "card_brand", "INTEGER NOT NULL DEFAULT 3");
+            TryAddColumn(connection, "boa_cards", "card_product", "INTEGER NOT NULL DEFAULT 1");
+            TryAddColumn(connection, "boa_cards", "cvv2_hash", "TEXT NULL");
+            TryAddColumn(connection, "boa_cards", "cvv_hash", "TEXT NULL");
+            TryAddColumn(connection, "boa_cards", "service_code", "TEXT NOT NULL DEFAULT '201'");
+            TryAddColumn(connection, "boa_cards", "track2_data", "TEXT NULL");
         }
     }
 
@@ -483,7 +507,8 @@ public class SqliteMockProvider : IBoaDbProvider
 
                 case "sp_boa_bin_lookup":
                     // 8. Kart türüne göre BIN kodu sorgulama (BKM BIN tablosu simülasyonu)
-                    var binCmd = new SqliteCommand("SELECT bin_code, card_brand FROM boa_bin_table WHERE card_type = @cardType LIMIT 1", connection);
+                    var binCmd = new SqliteCommand(
+                        "SELECT bin_code, card_brand, card_product FROM boa_bin_table WHERE card_type = @cardType ORDER BY card_product LIMIT 1", connection);
                     binCmd.Parameters.AddWithValue("@cardType", parameters["p_card_type"]);
                     using (var reader = binCmd.ExecuteReader())
                     {
@@ -1145,8 +1170,8 @@ public class SqliteMockProvider : IBoaDbProvider
                 ? Convert.ToInt32(statusParam)
                 : 1;
             string insertSql = @"
-                INSERT INTO boa_cards (card_number, encrypted_pan, pin_hash, card_holder_name, card_type, expiry_date, status, card_limit, balance, account_id, customer_id, bank_account_id, created_date)
-                VALUES (@num, @enc, @pin, @name, @type, @expiry, @status, @limit, @balance, @accId, @custId, @bankAccId, @created); SELECT last_insert_rowid();";
+                INSERT INTO boa_cards (card_number, encrypted_pan, pin_hash, card_holder_name, emboss_name, card_type, card_brand, card_product, expiry_date, status, card_limit, balance, account_id, customer_id, bank_account_id, cvv2_hash, cvv_hash, service_code, track2_data, created_date)
+                VALUES (@num, @enc, @pin, @name, @emboss, @type, @brand, @product, @expiry, @status, @limit, @balance, @accId, @custId, @bankAccId, @cvv2h, @cvvh, @svc, @track2, @created); SELECT last_insert_rowid();";
 
             int cardId = 0;
             using (var cmd = new SqliteCommand(insertSql, conn, tx))
@@ -1155,7 +1180,10 @@ public class SqliteMockProvider : IBoaDbProvider
                 cmd.Parameters.AddWithValue("@enc", parameters["p_encrypted_pan"]);
                 cmd.Parameters.AddWithValue("@pin", parameters["p_pin_hash"] ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("@name", parameters["p_card_holder_name"]);
+                cmd.Parameters.AddWithValue("@emboss", parameters.TryGetValue("p_emboss_name", out var emb) ? emb?.ToString() ?? "" : "");
                 cmd.Parameters.AddWithValue("@type", parameters["p_card_type"]);
+                cmd.Parameters.AddWithValue("@brand", parameters.TryGetValue("p_card_brand", out var br) ? Convert.ToInt32(br) : 3);
+                cmd.Parameters.AddWithValue("@product", parameters.TryGetValue("p_card_product", out var pr) ? Convert.ToInt32(pr) : 1);
                 cmd.Parameters.AddWithValue("@expiry", Convert.ToDateTime(parameters["p_expiry_date"]).ToString("yyyy-MM-dd HH:mm:ss"));
                 cmd.Parameters.AddWithValue("@status", cardStatus);
                 cmd.Parameters.AddWithValue("@limit", Convert.ToDecimal(parameters["p_limit"]));
@@ -1163,6 +1191,10 @@ public class SqliteMockProvider : IBoaDbProvider
                 cmd.Parameters.AddWithValue("@accId", accId);
                 cmd.Parameters.AddWithValue("@custId", customerId);
                 cmd.Parameters.AddWithValue("@bankAccId", bankAccountId);
+                cmd.Parameters.AddWithValue("@cvv2h", parameters.TryGetValue("p_cvv2_hash", out var cvv2h) ? cvv2h?.ToString() : (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@cvvh", parameters.TryGetValue("p_cvv_hash", out var cvvh) ? cvvh?.ToString() : (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@svc", parameters.TryGetValue("p_service_code", out var svc) ? svc?.ToString() ?? "201" : "201");
+                cmd.Parameters.AddWithValue("@track2", parameters.TryGetValue("p_track2_data", out var trk2) ? trk2?.ToString() : (object)DBNull.Value);
                 cmd.Parameters.AddWithValue("@created", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
                 cardId = Convert.ToInt32(cmd.ExecuteScalar());
             }

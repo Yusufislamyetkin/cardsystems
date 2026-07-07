@@ -30,19 +30,41 @@ public class CardDto
     public string CardHolderName { get; set; } = string.Empty;
 
     /// <summary>
+    /// Kart sahibinin EMBOSS standardında formatlanmış adı (max 21 karakter, uppercase, Türkçe karakterler ASCII'ye dönüştürülmüş).
+    /// Kart basımında kullanılır.
+    /// </summary>
+    [DataMember]
+    public string EmbossName { get; set; } = string.Empty;
+
+    /// <summary>
     /// Kartın Tipi (Banka Kartı veya Kredi Kartı).
     /// </summary>
     [DataMember]
     public CardType CardType { get; set; }
 
     /// <summary>
+    /// Kartın ait olduğu kart ağı markası (Visa, Mastercard, Troy, Amex).
+    /// BIN numarasına göre otomatik belirlenir.
+    /// </summary>
+    [DataMember]
+    public CardBrand CardBrand { get; set; }
+
+    /// <summary>
+    /// Kartın ürün segmenti (Classic, Gold, Platinum, Business, Premium).
+    /// Limit tavanı ve ek hizmetler bu segmente göre belirlenir.
+    /// </summary>
+    [DataMember]
+    public CardProduct CardProduct { get; set; }
+
+    /// <summary>
     /// Kartın son kullanma tarihi (MM/YY formatında sunulmak üzere saklanır).
+    /// Ayın son gününe normalize edilmiştir.
     /// </summary>
     [DataMember]
     public DateTime ExpiryDate { get; set; }
 
     /// <summary>
-    /// Kartın güncel durumu (Aktif, Bloke, İptal).
+    /// Kartın güncel durumu (Aktif, Bloke, İptal, PendingActivation, InTransit).
     /// </summary>
     [DataMember]
     public CardStatus Status { get; set; }
@@ -94,7 +116,35 @@ public class CardDto
     public string? PaycoreReference { get; set; }
 
     /// <summary>
-    /// Kart numarasını güvenlik standartlarına (PCI-DSS) uygun şekilde maskeleyerek döner.
+    /// Kartın arkasındaki 3 haneli CVV2 güvenlik kodunun hash'lenmiş değeri.
+    /// Gerçek CVV2 değeri asla düz metin olarak saklanmaz — yalnızca HSM'den türetilmiş hash
+    /// tutulur. İstemciye iletilmez (PCI-DSS gereği); yalnızca HSM doğrulama akışında kullanılır.
+    /// </summary>
+    [DataMember]
+    public string? Cvv2Hash { get; set; }
+
+    /// <summary>
+    /// Manyetik şerit CVV değerinin hash'lenmiş karşılığı.
+    /// </summary>
+    [DataMember]
+    public string? CvvHash { get; set; }
+
+    /// <summary>
+    /// EMV Service Code (3 hane). Kartın kullanım kısıtlamalarını belirtir.
+    /// Örn: "201" = Chip + International, normal authorization, PIN required.
+    /// </summary>
+    [DataMember]
+    public string ServiceCode { get; set; } = "201";
+
+    /// <summary>
+    /// Track2 eşdeğer verisi (PAN + Expiry + Service Code + PVKI + CVV + padding).
+    /// Manyetik şeritli ve temassız işlemlerde kullanılır.
+    /// </summary>
+    [DataMember]
+    public string? Track2Data { get; set; }
+
+    /// <summary>
+    /// Kart numarasını PCI-DSS uyumlu şekilde maskeleyerek döner.
     /// Örnek: "4355 12** **** 9012"
     /// </summary>
     public string MaskedCardNumber
@@ -106,11 +156,25 @@ public class CardDto
             // Eğer numara zaten maskeli geldiyse doğrudan formatlayıp döneriz
             if (CardNumber.Contains("*"))
             {
-                return CardNumber.Length == 16 
+                return CardNumber.Length == 16
                     ? $"{CardNumber.Substring(0, 4)} {CardNumber.Substring(4, 2)}** **** {CardNumber.Substring(12, 4)}"
                     : CardNumber;
             }
             return $"{CardNumber.Substring(0, 4)} {CardNumber.Substring(4, 2)}** **** {CardNumber.Substring(12, 4)}";
+        }
+    }
+
+    /// <summary>
+    /// Kart numarasının son 4 hanesini döndürür.
+    /// </summary>
+    public string Last4Digits
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(CardNumber) || CardNumber.Length < 4)
+                return "****";
+            string sanitized = CardNumber.Replace(" ", "").Replace("*", "");
+            return sanitized.Length >= 4 ? sanitized.Substring(sanitized.Length - 4) : sanitized;
         }
     }
 
@@ -127,4 +191,9 @@ public class CardDto
             return $"GL-CARD-{CreatedDate:yyyyMMdd}-{last4}";
         }
     }
+
+    /// <summary>
+    /// Son kullanma tarihini MM/YY formatında döndürür (kart ön yüz gösterimi için).
+    /// </summary>
+    public string ExpiryDisplay => ExpiryDate.ToString("MM/yy");
 }

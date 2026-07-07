@@ -37,6 +37,9 @@ public class DecideCardApplicationResponse : ResponseBase
 public class GetCardApplicationsRequest : RequestBase
 {
     [DataMember]
+    public int? ApplicationId { get; set; }
+
+    [DataMember]
     public CardApplicationStatus? Status { get; set; }
 
     [DataMember]

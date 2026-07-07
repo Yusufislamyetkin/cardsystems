@@ -13,6 +13,9 @@ public class DeliverCardRequest : RequestBase
 {
     [DataMember]
     public int CardId { get; set; }
+
+    [DataMember]
+    public string? TrackingNumber { get; set; }
 }
 
 [DataContract]

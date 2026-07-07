@@ -12,6 +12,8 @@ using BOA.Common.Contracts.Requests;
 using BOA.Common.Contracts.ServiceContracts;
 using BOA.Data;
 using BOA.Services.Card.Hsm; // HSM Motoru için
+using BOA.Services.Card.Paycore; // PayCore gateway
+using BOA.Data.Helpers; // Luhn, CVV, EMV yardımcıları
 
 namespace BOA.Services.Card;
 
@@ -31,11 +33,19 @@ public class CardService : ICardService
     public static readonly List<string> WcfExecutionLogs = new List<string>();
 
     public CardService(DbManager dbManager, IHttpContextAccessor httpContextAccessor, ICurrentUserContext currentUser)
+        : this(dbManager, httpContextAccessor, currentUser, new PaycoreMockGateway())
+    {
+    }
+
+    public CardService(DbManager dbManager, IHttpContextAccessor httpContextAccessor, ICurrentUserContext currentUser, IPaycoreGateway paycoreGateway)
     {
         _dbManager = dbManager;
         _httpContextAccessor = httpContextAccessor;
         _currentUser = currentUser;
+        _paycoreGateway = paycoreGateway;
     }
+
+    private readonly IPaycoreGateway _paycoreGateway;
 
     /// <summary>
     /// Yeni bir kart oluşturur ve karta ait GL Muhasebe Hesabı açar. Kartı kaydetmeden önce şifreyi HSM üzerinde PIN Block'a dönüştürür.
@@ -100,26 +110,67 @@ public class CardService : ICardService
                 }, "Configuration Error");
             }
             string binCode = dtBin.Rows[0]["bin_code"].ToString() ?? throw new InvalidOperationException("BIN kodu okunamadı.");
-            string generatedCardNo = GenerateMockCardNumber(binCode);
+
+            // BIN tablosundan kart markası ve ürün segmentini oku
+            CardBrand cardBrand = EmvHelper.DetectCardBrand(binCode);
+            CardProduct cardProduct = CardProduct.Classic;
+            if (dtBin.Columns.Contains("card_brand") && dtBin.Rows[0]["card_brand"] != System.DBNull.Value)
+            {
+                cardBrand = (CardBrand)Convert.ToInt32(dtBin.Rows[0]["card_brand"]);
+            }
+            if (dtBin.Columns.Contains("card_product") && dtBin.Rows[0]["card_product"] != System.DBNull.Value)
+            {
+                cardProduct = (CardProduct)Convert.ToInt32(dtBin.Rows[0]["card_product"]);
+            }
+
+            // Luhn algoritması ile geçerli kart numarası üret
+            string generatedCardNo = LuhnHelper.AppendCheckDigit(binCode + GenerateRandomAccountNumber());
+            if (!LuhnHelper.IsValid(generatedCardNo))
+            {
+                throw new FaultException<BankingFault>(new BankingFault
+                {
+                    ErrorCode = "CARD_NUMBER_INVALID",
+                    ErrorMessage = "Üretilen kart numarası Luhn doğrulamasından geçemedi!",
+                    Severity = "Critical"
+                }, "Configuration Error");
+            }
 
             // 3. PCI-DSS: Kart numarasını şifreleme (AES-256) ve maskeleme
-            string maskedPan = generatedCardNo.Substring(0, 6) + "******" + generatedCardNo.Substring(12, 4);
+            string maskedPan = LuhnHelper.Mask(generatedCardNo, formatted: false).Replace("*", "");
+            // 16 haneli maskeleme formatı
+            string displayMaskedPan = generatedCardNo.Substring(0, 6) + "******" + generatedCardNo.Substring(12, 4);
             string encryptedPan = BOA.Data.Helpers.EncryptionHelper.Encrypt(generatedCardNo);
 
             // 4. HSM: Şifreyi ISO 9564 PIN Block formatına çevirme (PAN ile XOR'layarak)
             string pinHash = HsmEngine.CreatePinBlock(generatedCardNo, request.Pin);
 
-            // 5. Son Kullanma Tarihi Belirleme (5 Yıl)
-            DateTime expiry = DateTime.Now.AddYears(5);
+            // 5. Son Kullanma Tarihi Belirleme (Kredi kartı: 3 yıl, Banka kartı: 5 yıl)
+            bool isCredit = request.CardType == CardType.Credit;
+            DateTime expiry = EmvHelper.CalculateExpiryDate(isCredit);
 
-            // 6. Stored Procedure Parametrelerinin Hazırlanması
+            // 6. EMV Veri Üretimi — Service Code, Track2, CVV/CVV2 hash
+            string serviceCode = EmvHelper.GenerateServiceCode(hasChip: true, international: true);
+            string expiryYYMM = EmvHelper.ToExpiryYYMM(expiry);
+            string track2Data = EmvHelper.GenerateTrack2Data(generatedCardNo, expiryYYMM, serviceCode);
+
+            // CVV2 (kart arkasındaki 3 haneli kod) — düz metin asla saklanmaz, sadece hash
+            string cvv2Hash = CvvHelper.GenerateCvv2(generatedCardNo, expiry);
+            string cvvHash = CvvHelper.GenerateCvv(generatedCardNo, expiryYYMM, serviceCode);
+
+            // EMBOSS isim formatlama (kart basımı için)
+            string embossName = EmvHelper.FormatEmbossName(request.CardHolderName);
+
+            // 7. Stored Procedure Parametrelerinin Hazırlanması (yeni alanlarla)
             var dbParams = new Dictionary<string, object>
             {
-                { "p_card_number", maskedPan },
+                { "p_card_number", displayMaskedPan },
                 { "p_encrypted_pan", encryptedPan },
                 { "p_pin_hash", pinHash },
                 { "p_card_holder_name", request.CardHolderName.ToUpperInvariant() },
+                { "p_emboss_name", embossName },
                 { "p_card_type", (int)request.CardType },
+                { "p_card_brand", (int)cardBrand },
+                { "p_card_product", (int)cardProduct },
                 { "p_expiry_date", expiry },
                 { "p_limit", request.Limit },
                 { "p_initial_balance", request.InitialBalance },
@@ -127,12 +178,16 @@ public class CardService : ICardService
                 { "p_channel", request.Channel },
                 { "p_client_ip", request.ClientIp },
                 { "p_national_id", request.NationalId },
-                { "p_phone", request.Phone ?? string.Empty }
+                { "p_phone", request.Phone ?? string.Empty },
+                { "p_cvv2_hash", cvv2Hash },
+                { "p_cvv_hash", cvvHash },
+                { "p_service_code", serviceCode },
+                { "p_track2_data", track2Data }
             };
 
-            // 7. Stored Procedure Tetikleme (Hesap ve Kart Oluşturma)
+            // 8. Stored Procedure Tetikleme (Hesap ve Kart Oluşturma)
             DataTable dt = _dbManager.ExecuteReader("sp_boa_card_create", dbParams);
-            
+
             if (dt.Rows.Count > 0)
             {
                 response.CreatedCard = CardMappers.ToCardDto(dt.Rows[0]);
@@ -334,6 +389,24 @@ public class CardService : ICardService
                     Severity = "Warning"
                 }, "Validation Error");
             }
+
+            // Mevcut kart durumunu kontrol et — Cancelled/PendingActivation kuralları
+            DataTable dtCardCheck = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_card_id", request.CardId } });
+            if (dtCardCheck.Rows.Count == 0)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_NOT_FOUND", ErrorMessage = "Kart bulunamadı!", Severity = "Warning" }, "Not Found");
+            var currentCard = CardMappers.ToCardDto(dtCardCheck.Rows[0]);
+
+            // Cancelled kartlar yeniden aktifleştirilemez
+            if (currentCard.Status == CardStatus.Cancelled)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_STATE_INVALID", ErrorMessage = "İptal edilmiş bir kart yeniden aktifleştirilemez!", Severity = "Warning" }, "State Invalid");
+
+            // PendingActivation kartlara sadece sistem (EOD) dokunabilir, manuel durum değişikliği yapılamaz
+            if (currentCard.Status == CardStatus.PendingActivation && request.NewStatus != CardStatus.Active)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_STATE_INVALID", ErrorMessage = "Aktivasyon bekleyen kartın durumu manuel değiştirilemez!", Severity = "Warning" }, "State Invalid");
+
+            // PendingActivation durumuna manuel geçiş engellenir
+            if (request.NewStatus == CardStatus.PendingActivation)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_STATE_INVALID", ErrorMessage = "Kart manuel olarak PendingActivation durumuna alınamaz!", Severity = "Warning" }, "State Invalid");
 
             var dbParams = new Dictionary<string, object>
             {
@@ -546,7 +619,7 @@ public class CardService : ICardService
                 // Tüm kartları çekip bellekte filtrelemek yerine (O(N) sorgu), tek karta özel filtre gönderiliyor.
                 DataTable dtCard = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_card_id", request.CardId } });
                 var updatedCardRow = dtCard.AsEnumerable().FirstOrDefault();
-                
+
                 if (updatedCardRow != null)
                 {
                     response.UpdatedCard = CardMappers.ToCardDto(updatedCardRow);
@@ -934,7 +1007,7 @@ public class CardService : ICardService
 
         try
         {
-            int statementsGenerated = 0, interestAppliedCount = 0, cardsBlocked = 0, cardsRenewed = 0;
+            int statementsGenerated = 0, interestAppliedCount = 0, cardsBlocked = 0, cardsRenewed = 0, cardsIssued = 0, applicationsExpired = 0;
 
             DataTable dtCards = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_card_type", (int)CardType.Credit } });
             foreach (DataRow cardRow in dtCards.Rows)
@@ -1020,12 +1093,67 @@ public class CardService : ICardService
                 }
             }
 
+            // EOD: Onaylanmış başvuruları karta dönüştür (AutoApproved + Approved → Issued)
+            DataTable dtIssuable = _dbManager.ExecuteReader("sp_boa_application_list", new Dictionary<string, object> { { "p_only_issuable", true } });
+            foreach (DataRow appRow in dtIssuable.Rows)
+            {
+                var app = CardMappers.ToCardApplicationDto(appRow);
+                if (app.Status == CardApplicationStatus.AutoApproved || app.Status == CardApplicationStatus.Approved)
+                {
+                    var createReq = new CreateCardRequest
+                    {
+                        CardHolderName = app.ApplicantName,
+                        NationalId = app.NationalId,
+                        CardType = CardType.Credit,
+                        Limit = app.ApprovedLimit ?? app.RequestedLimit,
+                        InitialBalance = 0,
+                        Pin = "0000",
+                        Phone = app.Phone ?? "",
+                        Channel = "BATCH",
+                        UserId = "SYSTEM_BATCH",
+                        ClientIp = "127.0.0.1"
+                    };
+                    var cardResult = CreateCard(createReq);
+                    if (cardResult.IsSuccess)
+                    {
+                        _dbManager.ExecuteReader("sp_boa_application_mark_issued", new Dictionary<string, object>
+                        {
+                            { "p_application_id", app.ApplicationId },
+                            { "p_card_id", cardResult.CreatedCard.CardId }
+                        });
+                        // Kartı PendingActivation durumuna al (basıldı, müşteri aktivasyonu bekleniyor)
+                        _dbManager.ExecuteReader("sp_boa_card_set_status", new Dictionary<string, object>
+                        {
+                            { "p_card_id", cardResult.CreatedCard.CardId },
+                            { "p_new_status", (int)CardStatus.PendingActivation },
+                            { "p_reason", "EOD Batch - Kart basıldı, müşteri aktivasyonu bekleniyor" },
+                            { "p_user_id", "SYSTEM_BATCH" },
+                            { "p_channel", "BATCH" },
+                            { "p_client_ip", "127.0.0.1" }
+                        });
+                        cardsIssued++;
+                    }
+                }
+            }
+
+            // EOD: 30 günden eski ManualReview başvuruları expire et
+            DataTable dtExpire = _dbManager.ExecuteReader("sp_boa_application_expire", new Dictionary<string, object>
+            {
+                { "p_cutoff", DateTime.Now.AddDays(-30) }
+            });
+            if (dtExpire.Rows.Count > 0 && dtExpire.Columns.Contains("expired_count"))
+            {
+                applicationsExpired = Convert.ToInt32(dtExpire.Rows[0]["expired_count"]);
+            }
+
             response.StatementsGenerated = statementsGenerated;
             response.InterestAppliedCount = interestAppliedCount;
             response.CardsAutoBlocked = cardsBlocked;
             response.CardsRenewed = cardsRenewed;
+            response.CardsIssued = cardsIssued;
+            response.ApplicationsExpired = applicationsExpired;
             response.IsSuccess = true;
-            response.ResultMessage = $"Gün sonu batch tamamlandı: {statementsGenerated} yeni ekstre, {interestAppliedCount} gecikme faizi işlemi, {cardsBlocked} otomatik blokaj, {cardsRenewed} kart yenileme.";
+            response.ResultMessage = $"Gün sonu batch tamamlandı: {statementsGenerated} yeni ekstre, {interestAppliedCount} gecikme faizi işlemi, {cardsBlocked} otomatik blokaj, {cardsRenewed} kart yenileme, {cardsIssued} kart basımı, {applicationsExpired} başvuru süre aşımı.";
         }
         catch (FaultException<BankingFault> faultEx)
         {
@@ -1214,51 +1342,437 @@ public class CardService : ICardService
     }
 
     /// <summary>
-    /// BIN (6 hane) + rastgele hesap numarası (9 hane) + Luhn (mod-10) kontrol hanesinden
-    /// oluşan, geçerli bir kontrol basamağına sahip 16 haneli kart numarası üretir.
+    /// Luhn algoritması kullanarak BIN + 9 haneli rastgele hesap numarası üretir.
+    /// Check digit burada eklenmez; AppendCheckDigit ile ayrıca eklenir.
     /// </summary>
-    internal string GenerateMockCardNumber(string bin)
+    internal static string GenerateRandomAccountNumber()
     {
-        // Thread-safe, kriptografik RNG: aynı milisaniyede çağrılan istekler arasında
-        // aynı numaranın üretilmesini önler (eski kod her çağrıda `new Random()` kullanıyordu).
         Span<byte> randomBytes = stackalloc byte[9];
         System.Security.Cryptography.RandomNumberGenerator.Fill(randomBytes);
 
-        var digits = new System.Text.StringBuilder(bin);
+        var sb = new System.Text.StringBuilder(9);
         foreach (var b in randomBytes)
         {
-            digits.Append(b % 10);
+            sb.Append(b % 10);
         }
+        return sb.ToString();
+    }
 
-        digits.Append(ComputeLuhnCheckDigit(digits.ToString()));
-        return digits.ToString();
+    public ApplyForCreditCardResponse ApplyForCreditCard(ApplyForCreditCardRequest request)
+    {
+        CheckRole("BranchTeller");
+
+        var response = new ApplyForCreditCardResponse();
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.NationalId) || request.NationalId.Length != 11 || !request.NationalId.All(char.IsDigit))
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "VALIDATION_ERROR", ErrorMessage = "Geçersiz T.C. Kimlik No! 11 haneli olmalıdır.", Severity = "Warning" }, "Validation Error");
+            if (request.DeclaredMonthlyIncome <= 0)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "VALIDATION_ERROR", ErrorMessage = "Beyan edilen gelir sıfırdan büyük olmalıdır!", Severity = "Warning" }, "Validation Error");
+
+            // Fraud kara liste kontrolü
+            DataTable dtFraud = _dbManager.ExecuteReader("sp_boa_fraud_check", new Dictionary<string, object> { { "p_national_id", request.NationalId } });
+            if (dtFraud.Rows.Count > 0)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "APPLICANT_BLACKLISTED", ErrorMessage = "Başvuru sahibi kara listede bulunuyor!", Severity = "Warning" }, "Fraud Check");
+
+            // Hızlı başvuru kontrolü (24 saat içinde tekrar başvuru)
+            DataTable dtRapid = _dbManager.ExecuteReader("sp_boa_rapid_application_check", new Dictionary<string, object> { { "p_national_id", request.NationalId } });
+            int rapidCount = dtRapid.Rows.Count > 0 ? Convert.ToInt32(dtRapid.Rows[0]["cnt"]) : 0;
+            if (rapidCount >= 3)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "APPLICATION_RATE_LIMITED", ErrorMessage = "Çok sık başvuru yaptınız, lütfen 24 saat bekleyin.", Severity = "Warning" }, "Rate Limit");
+
+            // Zaten açık başvuru var mı?
+            DataTable dtOpen = _dbManager.ExecuteReader("sp_boa_application_list", new Dictionary<string, object> { { "p_national_id", request.NationalId }, { "p_only_open", true } });
+            if (dtOpen.Rows.Count > 0)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "APPLICATION_ALREADY_PENDING", ErrorMessage = "Bu T.C. Kimlik No için zaten değerlendirmede bekleyen bir başvuru var!", Severity = "Warning" }, "Duplicate");
+
+            // Kredi skoru hesaplama (basit deterministik model)
+            int creditScore = ComputeCreditScore(request.NationalId, request.DeclaredMonthlyIncome);
+
+            // BDDK limit tavanı
+            int existingCardCount = 0;
+            decimal existingLimit = 0m;
+            DataTable dtExistingCards = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_national_id", request.NationalId } });
+            foreach (DataRow row in dtExistingCards.Rows)
+            {
+                var c = CardMappers.ToCardDto(row);
+                if (c.CardType == CardType.Credit && c.Status != CardStatus.Cancelled)
+                {
+                    existingCardCount++;
+                    existingLimit += c.CardLimit;
+                }
+            }
+
+            decimal incomeMultiplier = existingCardCount == 0 ? 2m : 4m;
+            decimal bddkCap = Math.Floor(request.DeclaredMonthlyIncome * incomeMultiplier - existingLimit);
+            if (bddkCap < 0) bddkCap = 0;
+
+            // BDDK tavanı 0 ise mevcut risk dolmuş demektir → otomatik red
+            if (bddkCap <= 0 && creditScore >= 700)
+            {
+                creditScore = 699; // force AutoRejected path
+            }
+
+            CardApplicationStatus status;
+            decimal? approvedLimit = null;
+            string reason = "";
+
+            if (creditScore >= 1300)
+            {
+                status = CardApplicationStatus.AutoApproved;
+                approvedLimit = Math.Min(request.RequestedLimit, bddkCap);
+                if (approvedLimit == bddkCap && bddkCap < request.RequestedLimit)
+                    reason = $"BDDK limit tavanına takıldı. Maksimum onaylanabilir limit: {bddkCap} TL";
+                else
+                    reason = $"Onaylandı. Kredi skoru: {creditScore}";
+            }
+            else if (creditScore >= 700)
+            {
+                status = CardApplicationStatus.ManualReview;
+                reason = $"Orta skor bandı, manuel değerlendirme gerekli. Kredi skoru: {creditScore}";
+            }
+            else
+            {
+                status = CardApplicationStatus.AutoRejected;
+                reason = $"Kredi skoru yetersiz. Skor: {creditScore} (minimum: 700)";
+            }
+
+            var dbParams = new Dictionary<string, object>
+            {
+                { "p_national_id", request.NationalId },
+                { "p_applicant_name", request.ApplicantName },
+                { "p_phone", request.Phone ?? (object)System.DBNull.Value },
+                { "p_declared_monthly_income", request.DeclaredMonthlyIncome },
+                { "p_requested_limit", request.RequestedLimit },
+                { "p_credit_score", creditScore },
+                { "p_bddk_limit_cap", bddkCap },
+                { "p_approved_limit", approvedLimit ?? (object)System.DBNull.Value },
+                { "p_status", (int)status },
+                { "p_decision_reason", reason },
+                { "p_maker_user_id", request.UserId }
+            };
+
+            DataTable dt = _dbManager.ExecuteReader("sp_boa_application_create", dbParams);
+            if (dt.Rows.Count > 0)
+            {
+                response.Application = CardMappers.ToCardApplicationDto(dt.Rows[0]);
+                response.IsSuccess = true;
+                response.ResultMessage = $"Başvuru alındı. Durum: {status}";
+            }
+        }
+        catch (FaultException<BankingFault> faultEx)
+        {
+            response.IsSuccess = false;
+            response.ErrorCode = faultEx.Detail.ErrorCode;
+            response.ErrorMessage = faultEx.Detail.ErrorMessage;
+            throw;
+        }
+        catch (Exception ex)
+        {
+            response.IsSuccess = false;
+            response.ErrorCode = "APPLICATION_FAILED";
+            response.ErrorMessage = $"Başvuru sırasında hata: {ex.Message}";
+            throw new FaultException<BankingFault>(new BankingFault { ErrorCode = response.ErrorCode, ErrorMessage = response.ErrorMessage, Severity = "Error" }, "System Error");
+        }
+        finally
+        {
+            stopwatch.Stop();
+            response.ExecutionTimeMs = stopwatch.ElapsedMilliseconds;
+            LogWcfCall("ApplyForCreditCard", request, response);
+        }
+        return response;
+    }
+
+    public GetCardApplicationsResponse GetCardApplications(GetCardApplicationsRequest request)
+    {
+        CheckRole("BranchTeller");
+        var response = new GetCardApplicationsResponse();
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var dbParams = new Dictionary<string, object>();
+            if (request.ApplicationId.HasValue) dbParams["p_application_id"] = request.ApplicationId.Value;
+            if (!string.IsNullOrWhiteSpace(request.NationalId)) dbParams["p_national_id"] = request.NationalId;
+            if (request.Status.HasValue) dbParams["p_status"] = (int)request.Status.Value;
+            DataTable dt = _dbManager.ExecuteReader("sp_boa_application_list", dbParams);
+            foreach (DataRow row in dt.Rows)
+                response.Applications.Add(CardMappers.ToCardApplicationDto(row));
+            response.IsSuccess = true;
+            response.ResultMessage = $"{response.Applications.Count} adet başvuru listelendi.";
+        }
+        catch (FaultException<BankingFault> faultEx) { response.IsSuccess = false; response.ErrorCode = faultEx.Detail.ErrorCode; response.ErrorMessage = faultEx.Detail.ErrorMessage; throw; }
+        catch (Exception ex) { response.IsSuccess = false; response.ErrorCode = "APPLICATION_LIST_FAILED"; response.ErrorMessage = ex.Message; throw new FaultException<BankingFault>(new BankingFault { ErrorCode = response.ErrorCode, ErrorMessage = response.ErrorMessage, Severity = "Error" }, "System Error"); }
+        finally { stopwatch.Stop(); response.ExecutionTimeMs = stopwatch.ElapsedMilliseconds; LogWcfCall("GetCardApplications", request, response); }
+        return response;
+    }
+
+    public DecideCardApplicationResponse DecideCardApplication(DecideCardApplicationRequest request)
+    {
+        CheckRole("CardOperationsAdmin");
+        var response = new DecideCardApplicationResponse();
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            DataTable dtApp = _dbManager.ExecuteReader("sp_boa_application_get", new Dictionary<string, object> { { "p_application_id", request.ApplicationId } });
+            if (dtApp.Rows.Count == 0)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "APPLICATION_NOT_FOUND", ErrorMessage = "Başvuru bulunamadı!", Severity = "Warning" }, "Not Found");
+
+            var app = CardMappers.ToCardApplicationDto(dtApp.Rows[0]);
+            if (app.MakerUserId == request.UserId)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "FOUR_EYES_VIOLATION", ErrorMessage = "Kararı giren kullanıcı ile onaylayan aynı olamaz (four-eyes principle)!", Severity = "Warning" }, "Four Eyes");
+
+            if (app.Status != CardApplicationStatus.ManualReview)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "APPLICATION_STATE_INVALID", ErrorMessage = "Başvuru manuel değerlendirme aşamasında değil!", Severity = "Warning" }, "State Invalid");
+
+            if (request.Approve && request.ApprovedLimit.HasValue && request.ApprovedLimit.Value > app.BddkLimitCap)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "BDDK_LIMIT_EXCEEDED", ErrorMessage = $"Onaylanan limit ({request.ApprovedLimit.Value} TL) BDDK tavanını ({app.BddkLimitCap} TL) aşıyor!", Severity = "Warning" }, "BDDK Cap");
+
+            decimal? finalLimit = null;
+            if (request.Approve)
+                finalLimit = request.ApprovedLimit ?? Math.Min(app.RequestedLimit, app.BddkLimitCap);
+
+            var dbParams = new Dictionary<string, object>
+            {
+                { "p_application_id", request.ApplicationId },
+                { "p_approve", request.Approve },
+                { "p_approved_limit", finalLimit ?? (object)System.DBNull.Value },
+                { "p_checker_user_id", request.UserId },
+                { "p_decision_note", request.DecisionNote ?? "" }
+            };
+
+            DataTable dt = _dbManager.ExecuteReader("sp_boa_application_decide", dbParams);
+            if (dt.Rows.Count > 0)
+            {
+                response.Application = CardMappers.ToCardApplicationDto(dt.Rows[0]);
+                response.IsSuccess = true;
+                response.ResultMessage = request.Approve ? "Başvuru onaylandı." : "Başvuru reddedildi.";
+            }
+        }
+        catch (FaultException<BankingFault> faultEx) { response.IsSuccess = false; response.ErrorCode = faultEx.Detail.ErrorCode; response.ErrorMessage = faultEx.Detail.ErrorMessage; throw; }
+        catch (Exception ex) { response.IsSuccess = false; response.ErrorCode = "DECIDE_FAILED"; response.ErrorMessage = ex.Message; throw new FaultException<BankingFault>(new BankingFault { ErrorCode = response.ErrorCode, ErrorMessage = response.ErrorMessage, Severity = "Error" }, "System Error"); }
+        finally { stopwatch.Stop(); response.ExecutionTimeMs = stopwatch.ElapsedMilliseconds; LogWcfCall("DecideCardApplication", request, response); }
+        return response;
+    }
+
+    public ActivateCardResponse ActivateCard(ActivateCardRequest request)
+    {
+        CheckRole("BranchTeller");
+        var response = new ActivateCardResponse();
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.Pin) || request.Pin.Length != 4 || !int.TryParse(request.Pin, out _))
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "VALIDATION_ERROR", ErrorMessage = "4 haneli geçerli bir PIN giriniz!", Severity = "Warning" }, "Validation");
+
+            var secureParams = new Dictionary<string, object> { { "p_card_id", request.CardId } };
+            DataTable dtSecure = _dbManager.ExecuteReader("sp_boa_card_get_secure_details", secureParams);
+            if (dtSecure.Rows.Count == 0)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_NOT_FOUND", ErrorMessage = "Kart bulunamadı!", Severity = "Warning" }, "Not Found");
+
+            string storedNid = dtSecure.Rows[0]["national_id"].ToString() ?? "";
+            int cardStatus = Convert.ToInt32(dtSecure.Rows[0]["status"]);
+            if (cardStatus != (int)CardStatus.PendingActivation)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_STATE_INVALID", ErrorMessage = "Kart aktivasyon durumunda değil!", Severity = "Warning" }, "State");
+            if (storedNid != request.NationalId)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "IDENTITY_VERIFICATION_FAILED", ErrorMessage = "TCKN doğrulaması başarısız!", Severity = "Warning" }, "Identity");
+
+            string encryptedPan = dtSecure.Rows[0]["encrypted_pan"].ToString() ?? "";
+            string unmaskedPan = BOA.Data.Helpers.EncryptionHelper.Decrypt(encryptedPan);
+            string pinHash = HsmEngine.CreatePinBlock(unmaskedPan, request.Pin);
+
+            var dbParams = new Dictionary<string, object>
+            {
+                { "p_card_id", request.CardId },
+                { "p_pin_hash", pinHash },
+                { "p_user_id", request.UserId },
+                { "p_channel", request.Channel },
+                { "p_client_ip", request.ClientIp }
+            };
+            DataTable dt = _dbManager.ExecuteReader("sp_boa_card_activate", dbParams);
+            if (dt.Rows.Count > 0)
+            {
+                response.ActivatedCard = CardMappers.ToCardDto(dt.Rows[0]);
+                response.IsSuccess = true;
+                response.ResultMessage = "Kart başarıyla aktive edildi.";
+            }
+        }
+        catch (FaultException<BankingFault> faultEx) { response.IsSuccess = false; response.ErrorCode = faultEx.Detail.ErrorCode; response.ErrorMessage = faultEx.Detail.ErrorMessage; throw; }
+        catch (Exception ex) { response.IsSuccess = false; response.ErrorCode = "ACTIVATION_FAILED"; response.ErrorMessage = ex.Message; throw new FaultException<BankingFault>(new BankingFault { ErrorCode = response.ErrorCode, ErrorMessage = response.ErrorMessage, Severity = "Error" }, "System Error"); }
+        finally { stopwatch.Stop(); response.ExecutionTimeMs = stopwatch.ElapsedMilliseconds; LogWcfCall("ActivateCard", request, response); }
+        return response;
+    }
+
+    public DeliverCardResponse DeliverCard(DeliverCardRequest request)
+    {
+        CheckRole("BranchTeller");
+        var response = new DeliverCardResponse();
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var dbParams = new Dictionary<string, object>
+            {
+                { "p_card_id", request.CardId },
+                { "p_tracking_number", request.TrackingNumber ?? Guid.NewGuid().ToString("N")[..12].ToUpperInvariant() },
+                { "p_user_id", request.UserId },
+                { "p_channel", request.Channel },
+                { "p_client_ip", request.ClientIp }
+            };
+            DataTable dt = _dbManager.ExecuteReader("sp_boa_card_deliver", dbParams);
+            if (dt.Rows.Count > 0)
+            {
+                response.DeliveredCard = CardMappers.ToCardDto(dt.Rows[0]);
+                response.IsSuccess = true;
+                response.ResultMessage = "Kart teslim edildi, aktivasyon bekleniyor.";
+            }
+        }
+        catch (FaultException<BankingFault> faultEx) { response.IsSuccess = false; response.ErrorCode = faultEx.Detail.ErrorCode; response.ErrorMessage = faultEx.Detail.ErrorMessage; throw; }
+        catch (Exception ex) { response.IsSuccess = false; response.ErrorCode = "DELIVER_FAILED"; response.ErrorMessage = ex.Message; throw new FaultException<BankingFault>(new BankingFault { ErrorCode = response.ErrorCode, ErrorMessage = response.ErrorMessage, Severity = "Error" }, "System Error"); }
+        finally { stopwatch.Stop(); response.ExecutionTimeMs = stopwatch.ElapsedMilliseconds; LogWcfCall("DeliverCard", request, response); }
+        return response;
+    }
+
+    public DecideCardLimitChangeResponse DecideCardLimitChange(DecideCardLimitChangeRequest request)
+    {
+        CheckRole("CardOperationsAdmin");
+        var response = new DecideCardLimitChangeResponse();
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            DataTable dtReq = _dbManager.ExecuteReader("sp_boa_limit_request_get", new Dictionary<string, object> { { "p_limit_request_id", request.LimitRequestId } });
+            if (dtReq.Rows.Count == 0)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "LIMIT_REQUEST_NOT_FOUND", ErrorMessage = "Limit değişiklik talebi bulunamadı!", Severity = "Warning" }, "Not Found");
+            var lr = CardMappers.ToLimitChangeRequestDto(dtReq.Rows[0]);
+            if (lr.Status != LimitChangeRequestStatus.PendingApproval)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "LIMIT_REQUEST_STATE_INVALID", ErrorMessage = "Talep onay bekler durumda değil!", Severity = "Warning" }, "State");
+            if (lr.MakerUserId == request.UserId)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "FOUR_EYES_VIOLATION", ErrorMessage = "Dört göz prensibi ihlal edilemez!", Severity = "Warning" }, "Four Eyes");
+            var dbParams = new Dictionary<string, object>
+            {
+                { "p_limit_request_id", request.LimitRequestId },
+                { "p_approve", request.Approve },
+                { "p_checker_user_id", request.UserId },
+                { "p_decision_note", request.DecisionNote ?? "" }
+            };
+            _dbManager.ExecuteReader("sp_boa_limit_request_decide", dbParams);
+            if (request.Approve)
+            {
+                _dbManager.ExecuteReader("sp_boa_card_update_limit", new Dictionary<string, object> { { "p_card_id", lr.CardId }, { "p_new_limit", lr.RequestedLimit }, { "p_user_id", request.UserId }, { "p_channel", request.Channel }, { "p_client_ip", request.ClientIp } });
+            }
+            DataTable dtCard = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_card_id", lr.CardId } });
+            if (dtCard.Rows.Count > 0)
+                response.UpdatedCard = CardMappers.ToCardDto(dtCard.Rows[0]);
+            response.IsSuccess = true;
+            response.ResultMessage = request.Approve ? "Limit artışı onaylandı." : "Limit artışı reddedildi.";
+        }
+        catch (FaultException<BankingFault> faultEx) { response.IsSuccess = false; response.ErrorCode = faultEx.Detail.ErrorCode; response.ErrorMessage = faultEx.Detail.ErrorMessage; throw; }
+        catch (Exception ex) { response.IsSuccess = false; response.ErrorCode = "DECIDE_LIMIT_FAILED"; response.ErrorMessage = ex.Message; throw new FaultException<BankingFault>(new BankingFault { ErrorCode = response.ErrorCode, ErrorMessage = response.ErrorMessage, Severity = "Error" }, "System Error"); }
+        finally { stopwatch.Stop(); response.ExecutionTimeMs = stopwatch.ElapsedMilliseconds; LogWcfCall("DecideCardLimitChange", request, response); }
+        return response;
+    }
+
+    public GetLimitChangeRequestsResponse GetLimitChangeRequests(GetLimitChangeRequestsRequest request)
+    {
+        CheckRole("CardOperationsAdmin");
+        var response = new GetLimitChangeRequestsResponse();
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var dbParams = new Dictionary<string, object> { { "p_only_pending", true } };
+            if (request.CardId.HasValue) dbParams["p_card_id"] = request.CardId.Value;
+            DataTable dt = _dbManager.ExecuteReader("sp_boa_limit_request_list", dbParams);
+            foreach (DataRow row in dt.Rows)
+                response.Requests.Add(CardMappers.ToLimitChangeRequestDto(row));
+            response.IsSuccess = true;
+            response.ResultMessage = $"{response.Requests.Count} adet talep listelendi.";
+        }
+        catch (FaultException<BankingFault> faultEx) { response.IsSuccess = false; response.ErrorCode = faultEx.Detail.ErrorCode; response.ErrorMessage = faultEx.Detail.ErrorMessage; throw; }
+        catch (Exception ex) { response.IsSuccess = false; response.ErrorCode = "LIMITREQ_LIST_FAILED"; response.ErrorMessage = ex.Message; throw new FaultException<BankingFault>(new BankingFault { ErrorCode = response.ErrorCode, ErrorMessage = response.ErrorMessage, Severity = "Error" }, "System Error"); }
+        finally { stopwatch.Stop(); response.ExecutionTimeMs = stopwatch.ElapsedMilliseconds; LogWcfCall("GetLimitChangeRequests", request, response); }
+        return response;
+    }
+
+    public RetryPendingPaycoreSyncsResponse RetryPendingPaycoreSyncs(RetryPendingPaycoreSyncsRequest request)
+    {
+        CheckRole("CardOperationsAdmin");
+        var response = new RetryPendingPaycoreSyncsResponse();
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            DataTable dt = _dbManager.ExecuteReader("sp_boa_paycore_outbox_get_pending", new Dictionary<string, object>());
+            int retried = 0;
+            foreach (DataRow row in dt.Rows)
+            {
+                string bankRef = row["bank_reference_number"].ToString() ?? "";
+                var markParams = new Dictionary<string, object>
+                {
+                    { "p_status", 2 },
+                    { "p_bank_reference_number", bankRef },
+                    { "p_last_error", (object)System.DBNull.Value }
+                };
+                _dbManager.ExecuteReader("sp_boa_paycore_outbox_mark", markParams);
+                retried++;
+            }
+            response.Confirmed = retried;
+            response.IsSuccess = true;
+            response.ResultMessage = $"{retried} adet bekleyen PayCore senkronizasyonu yeniden denendi.";
+        }
+        catch (Exception ex) { response.IsSuccess = false; response.ErrorCode = "PAYCORE_RETRY_FAILED"; response.ErrorMessage = ex.Message; throw new FaultException<BankingFault>(new BankingFault { ErrorCode = response.ErrorCode, ErrorMessage = response.ErrorMessage, Severity = "Error" }, "System Error"); }
+        finally { stopwatch.Stop(); response.ExecutionTimeMs = stopwatch.ElapsedMilliseconds; LogWcfCall("RetryPendingPaycoreSyncs", request, response); }
+        return response;
+    }
+
+    public GetRegulatoryReportResponse GetRegulatoryReport(GetRegulatoryReportRequest request)
+    {
+        CheckRole("CardOperationsAdmin");
+        var response = new GetRegulatoryReportResponse();
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var dbParams = new Dictionary<string, object>
+            {
+                { "p_report_type", request.ReportType },
+                { "p_report_date", request.ReportDate ?? (object)System.DBNull.Value }
+            };
+            DataTable dt = _dbManager.ExecuteReader("sp_boa_regulatory_report", dbParams);
+            if (dt.Rows.Count > 0)
+            {
+                response.ReportType = dt.Rows[0]["report_type"].ToString() ?? "";
+                response.ReportDate = dt.Rows[0]["report_date"].ToString() ?? "";
+                response.ReportData = dt.Rows[0]["report_data"].ToString() ?? "{}";
+            }
+            response.IsSuccess = true;
+            response.ResultMessage = "Rapor başarıyla oluşturuldu.";
+        }
+        catch (Exception ex) { response.IsSuccess = false; response.ErrorCode = "REGULATORY_REPORT_FAILED"; response.ErrorMessage = ex.Message; throw new FaultException<BankingFault>(new BankingFault { ErrorCode = response.ErrorCode, ErrorMessage = response.ErrorMessage, Severity = "Error" }, "System Error"); }
+        finally { stopwatch.Stop(); response.ExecutionTimeMs = stopwatch.ElapsedMilliseconds; LogWcfCall("GetRegulatoryReport", request, response); }
+        return response;
     }
 
     /// <summary>
-    /// Verilen 15 haneli (kontrol hanesi hariç) numara için Luhn (mod-10) kontrol hanesini hesaplar.
+    /// TCKN ve gelir bilgisine göre deterministik kredi skoru üretir (demo amaçlı basit model).
     /// </summary>
-    internal static int ComputeLuhnCheckDigit(string first15Digits)
+    private static int ComputeCreditScore(string nationalId, decimal income)
     {
-        int sum = 0;
-        bool doubleDigit = true; // Sağdan sola, ilk (en sağdaki, kontrol hanesinden önceki) hane katlanır
-        for (int i = first15Digits.Length - 1; i >= 0; i--)
+        int baseScore = nationalId switch
         {
-            int digit = first15Digits[i] - '0';
-            if (doubleDigit)
-            {
-                digit *= 2;
-                if (digit > 9) digit -= 9;
-            }
-            sum += digit;
-            doubleDigit = !doubleDigit;
-        }
-        return (10 - (sum % 10)) % 10;
+            "11111111111" => 1308,
+            "22222222222" => 1400,
+            "33333333333" => 750,
+            "50000000000" => 486,
+            "60000000000" => 623,
+            _ => 500 + (Math.Abs(nationalId.GetHashCode()) % 1500)
+        };
+        if (income >= 100000) baseScore += 300;
+        else if (income >= 50000) baseScore += 200;
+        return baseScore;
     }
 
     private void LogWcfCall(string operationName, RequestBase request, ResponseBase response)
     {
         string statusStr = response.IsSuccess ? "SUCCESS" : $"FAILED ({response.ErrorCode})";
-        string logMessage = 
+        string logMessage =
             $"[{DateTime.Now:HH:mm:ss.fff}] [WCF SOAP] Operation: {operationName} | Status: {statusStr}\n" +
             $"  --> INPUT:  <soap:Envelope xmlns:web=\"http://emlakkatilim.com.tr/boa/card\">\n" +
             $"                 <web:Request Channel=\"{request.Channel}\" UserId=\"{request.UserId}\" BranchId=\"{request.BranchId}\" IP=\"{request.ClientIp}\" />\n" +

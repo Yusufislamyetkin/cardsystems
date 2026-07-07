@@ -16,16 +16,16 @@ public class CardCreationTests
         decimal limit = 0,
         decimal initialBalance = 1000,
         string pin = "1234") => new()
-    {
-        CardHolderName = cardHolderName,
-        NationalId = nationalId,
-        CardType = cardType,
-        Limit = limit,
-        InitialBalance = initialBalance,
-        Pin = pin,
-        Channel = "TEST",
-        UserId = "test"
-    };
+        {
+            CardHolderName = cardHolderName,
+            NationalId = nationalId,
+            CardType = cardType,
+            Limit = limit,
+            InitialBalance = initialBalance,
+            Pin = pin,
+            Channel = "TEST",
+            UserId = "test"
+        };
 
     [Fact]
     public void CreateCard_WithValidRequest_LinksCustomerAndBankAccount()
@@ -78,9 +78,9 @@ public class CardCreationTests
     {
         using var harness = new CardServiceTestHarness();
 
-        // GenerateMockCardNumber artık internal (InternalsVisibleTo BOA.Tests) — ham PAN hiçbir zaman
-        // servis sınırının dışına (PCI-DSS gereği) çıkmadığından, Luhn doğruluğunu doğrudan buradan test ederiz.
-        string cardNumber = harness.Service.GenerateMockCardNumber("435520");
+        // Kart numarası Luhn algoritması ile üretiliyor; test doğrudan LuhnHelper kullanır
+        // çünkü ham PAN asla servis sınırının dışına çıkmaz (PCI-DSS gereği).
+        string cardNumber = BOA.Data.Helpers.LuhnHelper.AppendCheckDigit("435520" + CardService.GenerateRandomAccountNumber());
 
         Assert.Equal(16, cardNumber.Length);
         Assert.True(IsValidLuhn(cardNumber));
