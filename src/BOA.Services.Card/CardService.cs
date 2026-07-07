@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
@@ -490,6 +489,10 @@ public class CardService : ICardService
             if (request.NewStatus == CardStatus.PendingActivation)
                 throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_STATE_INVALID", ErrorMessage = "Kart manuel olarak PendingActivation durumuna alınamaz!", Severity = "Warning" }, "State Invalid");
 
+            // InTransit durumdaki kart manuel olarak değiştirilemez
+            if (currentCard.Status == CardStatus.InTransit)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_STATE_INVALID", ErrorMessage = "Teslimat bekleyen kartın durumu manuel değiştirilemez!", Severity = "Warning" }, "State Invalid");
+
             var dbParams = new Dictionary<string, object>
             {
                 { "p_card_id", request.CardId },
@@ -500,6 +503,11 @@ public class CardService : ICardService
                 { "p_client_ip", request.ClientIp }
             };
 
+            if (request.NewStatus == CardStatus.Blocked && request.BlockReason.HasValue)
+                dbParams["p_block_reason"] = (int)request.BlockReason.Value;
+            if (request.NewStatus == CardStatus.Cancelled && request.CancellationReason.HasValue)
+                dbParams["p_cancellation_reason"] = (int)request.CancellationReason.Value;
+
             DataTable dt = _dbManager.ExecuteReader("sp_boa_card_set_status", dbParams);
 
             if (dt.Rows.Count > 0)
@@ -507,6 +515,26 @@ public class CardService : ICardService
                 response.UpdatedCard = CardMappers.ToCardDto(dt.Rows[0]);
                 response.IsSuccess = true;
                 response.ResultMessage = $"Kart durumu başarıyla '{request.NewStatus}' olarak güncellendi.";
+
+                // PayCore senkronu: kart ağına durum değişikliğini bildir
+                if (!string.IsNullOrEmpty(currentCard.PaycoreReference))
+                {
+                    try
+                    {
+                        _paycoreGateway.SetCardStatus(currentCard.PaycoreReference, request.NewStatus);
+                    }
+                    catch (Exception paycoreEx)
+                    {
+                        // PayCore hatası kartın durumunu değiştirmeyi engellemez — log'a yaz, mutabakat sonra düzeltsin
+                        _dbManager.ExecuteNonQuery("sp_boa_notification_create", new Dictionary<string, object>
+                        {
+                            { "p_national_id", currentCard.NationalId },
+                            { "p_channel", "SYSTEM" },
+                            { "p_template_key", "PAYCORE_SETSTATUS_FAILED" },
+                            { "p_message", $"PayCore SetCardStatus başarısız: {paycoreEx.Message}. Kart: {currentCard.CardId}, Ref: {currentCard.PaycoreReference}" }
+                        });
+                    }
+                }
             }
             else
             {
@@ -946,49 +974,6 @@ public class CardService : ICardService
             }
 
             response.Authorization = CardMappers.ToAuthorizationDto(dtAuth.Rows[0]);
-
-            // Banka onayladıysa PayCore'a gönder
-            if (response.Authorization.ResponseCode == AuthResponseCode.Approved)
-            {
-                DataTable dtCardForPaycore = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_card_id", request.CardId } });
-                string? paycoreRef = dtCardForPaycore.Rows.Count > 0 ? CardMappers.ToCardDto(dtCardForPaycore.Rows[0]).PaycoreReference : null;
-
-                if (!string.IsNullOrWhiteSpace(paycoreRef))
-                {
-                    try
-                    {
-                        var paycoreAuth = _paycoreGateway.Authorize(paycoreRef, request.Amount, refNo);
-                        if (paycoreAuth.IsApproved)
-                        {
-                            // PayCore onayladı — referansı kaydet
-                            var dtUpdatedAuth = _dbManager.ExecuteReader("sp_boa_auth_set_paycore_reference", new Dictionary<string, object>
-                            {
-                                { "p_authorization_id", response.Authorization.AuthorizationId },
-                                { "p_paycore_auth_reference", paycoreAuth.PaycoreAuthReference ?? "" }
-                            });
-                            if (dtUpdatedAuth.Rows.Count > 0)
-                                response.Authorization = CardMappers.ToAuthorizationDto(dtUpdatedAuth.Rows[0]);
-                        }
-                        else
-                        {
-                            // PayCore reddetti — holdü geri al
-                            var dtOverride = _dbManager.ExecuteReader("sp_boa_auth_override_decline", new Dictionary<string, object>
-                            {
-                                { "p_authorization_id", response.Authorization.AuthorizationId },
-                                { "p_response_code", (int)AuthResponseCode.DoNotHonor },
-                                { "p_reason", paycoreAuth.ErrorMessage ?? "PayCore declined" }
-                            });
-                            if (dtOverride.Rows.Count > 0)
-                                response.Authorization = CardMappers.ToAuthorizationDto(dtOverride.Rows[0]);
-                        }
-                    }
-                    catch
-                    {
-                        // PayCore'a ulaşılamadı — hold duruyor, paycore_auth_reference null kalacak
-                    }
-                }
-            }
-
             response.IsSuccess = true;
             response.ResultMessage = response.Authorization.ResponseCode == AuthResponseCode.Approved
                 ? $"Provizyon onaylandı. Provizyon Kodu: {response.Authorization.AuthorizationCode}"
@@ -1968,5 +1953,381 @@ public class CardService : ICardService
                 WcfExecutionLogs.RemoveAt(0);
             }
         }
+    }
+
+    // =================================================================================
+    // KART YAŞAM DÖNGÜSÜ: Kayıp/Çalıntı, İptal, Yenileme, Yeniden Basım
+    // =================================================================================
+
+    private CardDto CreateReplacementCard(CardDto oldCard, bool samePan, string holderName, CardProduct? newProduct,
+        string userId, string channel, string clientIp)
+    {
+        string panForCard;
+        string encryptedPan;
+        string binCode;
+        CardBrand brand = oldCard.CardBrand;
+        CardProduct product = newProduct ?? oldCard.CardProduct;
+        bool isCredit = oldCard.CardType == CardType.Credit;
+        DateTime newExpiry = EmvHelper.CalculateExpiryDate(isCredit);
+
+        if (samePan)
+        {
+            // Mevcut PAN'ı decrypt et ve aynısını kullan
+            DataTable dtSecure = _dbManager.ExecuteReader("sp_boa_card_get_secure_details",
+                new Dictionary<string, object> { { "p_card_id", oldCard.CardId } });
+            if (dtSecure.Rows.Count == 0)
+                throw new Exception("Eski kartın güvenli bilgileri okunamadı.");
+            string oldEncrypted = dtSecure.Rows[0]["encrypted_pan"].ToString() ?? "";
+            string oldPan = BOA.Data.Helpers.EncryptionHelper.Decrypt(oldEncrypted);
+            encryptedPan = BOA.Data.Helpers.EncryptionHelper.Encrypt(oldPan);
+            panForCard = oldPan.Substring(0, 6) + "******" + oldPan.Substring(12, 4); // maskeli
+        }
+        else
+        {
+            // Yeni BIN lookup + yeni PAN
+            DataTable dtBin = _dbManager.ExecuteReader("sp_boa_bin_lookup",
+                new Dictionary<string, object> { { "p_card_type", (int)oldCard.CardType } });
+            if (dtBin.Rows.Count == 0)
+                throw new Exception("BIN bulunamadı.");
+            binCode = dtBin.Rows[0]["bin_code"].ToString()!;
+            brand = EmvHelper.DetectCardBrand(binCode);
+            string newPan = LuhnHelper.AppendCheckDigit(binCode + GenerateRandomAccountNumber());
+            encryptedPan = BOA.Data.Helpers.EncryptionHelper.Encrypt(newPan);
+            panForCard = newPan.Substring(0, 6) + "******" + newPan.Substring(12, 4);
+        }
+
+        string serviceCode = EmvHelper.GenerateServiceCode(true, true);
+        string expiryYYMM = EmvHelper.ToExpiryYYMM(newExpiry);
+        string track2Data = EmvHelper.GenerateTrack2Data(panForCard.Replace("*", "0"), expiryYYMM, serviceCode);
+        string cvv2Hash = CvvHelper.GenerateCvv2(panForCard.Replace("*", "0"), newExpiry);
+        string cvvHash = CvvHelper.GenerateCvv(panForCard.Replace("*", "0"), expiryYYMM, serviceCode);
+        string embossName = EmvHelper.FormatEmbossName(holderName);
+
+        var spParams = new Dictionary<string, object>
+        {
+            { "p_card_number", panForCard },
+            { "p_encrypted_pan", encryptedPan },
+            { "p_pin_hash", (object)System.DBNull.Value },
+            { "p_card_holder_name", holderName.ToUpperInvariant() },
+            { "p_emboss_name", embossName },
+            { "p_card_type", (int)oldCard.CardType },
+            { "p_card_brand", (int)brand },
+            { "p_card_product", (int)product },
+            { "p_expiry_date", newExpiry },
+            { "p_limit", oldCard.CardLimit },
+            { "p_initial_balance", oldCard.Balance },
+            { "p_status", (int)CardStatus.PendingActivation },
+            { "p_previous_card_id", oldCard.CardId },
+            { "p_cvv2_hash", cvv2Hash },
+            { "p_cvv_hash", cvvHash },
+            { "p_service_code", serviceCode },
+            { "p_track2_data", track2Data },
+            { "p_user_id", userId },
+            { "p_channel", channel },
+            { "p_client_ip", clientIp },
+            { "p_national_id", oldCard.NationalId },
+            { "p_phone", "" }
+        };
+
+        DataTable dt = _dbManager.ExecuteReader("sp_boa_card_create_replacement", spParams);
+        if (dt.Rows.Count == 0)
+            throw new Exception("Yeni kart oluşturuldu fakat okunamadı.");
+        return CardMappers.ToCardDto(dt.Rows[0]);
+    }
+
+    public ReportLostStolenResponse ReportLostStolenCard(ReportLostStolenRequest request)
+    {
+        CheckRole("BranchTeller");
+        var response = new ReportLostStolenResponse();
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            if (request.BlockReason != BlockReason.LostCard && request.BlockReason != BlockReason.StolenCard && request.BlockReason != BlockReason.FraudSuspicion)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "VALIDATION_ERROR", ErrorMessage = "Bu endpoint yalnızca Kayıp, Çalıntı veya Fraud şüphesi bildirimlerini kabul eder.", Severity = "Warning" }, "Validation");
+            if (request.BlockReason == BlockReason.StolenCard && string.IsNullOrWhiteSpace(request.PoliceReportNumber))
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "VALIDATION_ERROR", ErrorMessage = "Çalıntı kart bildiriminde polis tutanak numarası zorunludur.", Severity = "Warning" }, "Validation");
+            if (string.IsNullOrWhiteSpace(request.Description))
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "VALIDATION_ERROR", ErrorMessage = "Olay açıklaması zorunludur.", Severity = "Warning" }, "Validation");
+
+            DataTable dtCard = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_card_id", request.CardId } });
+            if (dtCard.Rows.Count == 0)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_NOT_FOUND", ErrorMessage = "Kart bulunamadı!", Severity = "Warning" }, "Not Found");
+            var card = CardMappers.ToCardDto(dtCard.Rows[0]);
+
+            if (card.Status == CardStatus.Cancelled)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_CANCELLED", ErrorMessage = "İptal edilmiş kart için kayıp bildirimi yapılamaz.", Severity = "Warning" }, "State");
+            if (card.Status == CardStatus.Blocked)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_ALREADY_BLOCKED", ErrorMessage = "Kart zaten bloke durumda.", Severity = "Warning" }, "State");
+            if (card.Status == CardStatus.PendingActivation)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_STATE_INVALID", ErrorMessage = "Aktive edilmemiş kart için kayıp bildirimi yapılamaz.", Severity = "Warning" }, "State");
+
+            var spParams = new Dictionary<string, object>
+            {
+                { "p_card_id", request.CardId },
+                { "p_block_reason", (int)request.BlockReason },
+                { "p_description", request.Description },
+                { "p_police_report_number", request.PoliceReportNumber ?? (object)System.DBNull.Value },
+                { "p_last_known_transaction_ref", request.LastKnownTransactionRef ?? (object)System.DBNull.Value },
+                { "p_request_replacement", request.RequestReplacement },
+                { "p_replacement_card_id", (object)System.DBNull.Value },
+                { "p_user_id", request.UserId },
+                { "p_channel", request.Channel },
+                { "p_client_ip", request.ClientIp }
+            };
+
+            DataTable dt = _dbManager.ExecuteReader("sp_boa_card_report_lost_stolen", spParams);
+            if (dt.Rows.Count == 0)
+                throw new Exception("Bloke işlemi yapıldı fakat kart okunamadı.");
+            response.BlockedCard = CardMappers.ToCardDto(dt.Rows[0]);
+
+            // Block history'yi oku
+            try
+            {
+                DataTable dtHistory = _dbManager.ExecuteReader("sp_boa_card_get_secure_details",
+                    new Dictionary<string, object> { { "p_card_id", request.CardId } });
+            }
+            catch { }
+            response.BlockHistory = new CardBlockHistoryDto
+            {
+                CardId = request.CardId,
+                BlockReason = request.BlockReason,
+                IsEmergency = true,
+                Description = request.Description,
+                PoliceReportNumber = request.PoliceReportNumber,
+                LastKnownTransactionRef = request.LastKnownTransactionRef,
+                ReplacementRequested = request.RequestReplacement,
+                UserId = request.UserId,
+                CreatedDate = DateTime.Now
+            };
+
+            // Aktif provizyonları void et
+            int voidedCount = _dbManager.ExecuteNonQuery("sp_boa_card_void_active_auths",
+                new Dictionary<string, object> { { "p_card_id", request.CardId }, { "p_reason", $"Kayıp/Çalıntı - {request.BlockReason}" } });
+            response.VoidedAuthorizationCount = voidedCount;
+
+            // PayCore senkronu
+            if (!string.IsNullOrEmpty(card.PaycoreReference))
+            {
+                try { _paycoreGateway.SetCardStatus(card.PaycoreReference, CardStatus.Blocked); }
+                catch (Exception ex)
+                {
+                    _dbManager.ExecuteNonQuery("sp_boa_notification_create", new Dictionary<string, object>
+                    {
+                        { "p_national_id", card.NationalId },
+                        { "p_channel", "SYSTEM" },
+                        { "p_template_key", "PAYCORE_LOSTSTOLEN_FAILED" },
+                        { "p_message", $"PayCore bilgilendirme başarısız: {ex.Message}" }
+                    });
+                }
+            }
+
+            // Yedek kart talebi
+            if (request.RequestReplacement)
+            {
+                var newCard = CreateReplacementCard(card, samePan: false, card.CardHolderName, null,
+                    request.UserId, request.Channel, request.ClientIp);
+                response.ReplacementCardId = newCard.CardId;
+            }
+
+            response.IsSuccess = true;
+            response.ResultMessage = $"Kart başarıyla bloke edildi. {voidedCount} aktif provizyon iptal edildi.";
+        }
+        catch (FaultException<BankingFault>) { response.IsSuccess = false; throw; }
+        catch (Exception ex) { response.IsSuccess = false; response.ErrorCode = "LOST_STOLEN_FAILED"; response.ErrorMessage = ex.Message; throw new FaultException<BankingFault>(new BankingFault { ErrorCode = response.ErrorCode, ErrorMessage = response.ErrorMessage, Severity = "Error" }, "Error"); }
+        finally { stopwatch.Stop(); response.ExecutionTimeMs = stopwatch.ElapsedMilliseconds; LogWcfCall("ReportLostStolenCard", request, response); }
+        return response;
+    }
+
+    public CancelCardResponse CancelCard(CancelCardRequest request)
+    {
+        CheckRole("CardOperationsAdmin");
+        var response = new CancelCardResponse();
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.Description))
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "VALIDATION_ERROR", ErrorMessage = "İptal gerekçesi zorunludur.", Severity = "Warning" }, "Validation");
+
+            DataTable dtCard = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_card_id", request.CardId } });
+            if (dtCard.Rows.Count == 0)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_NOT_FOUND", ErrorMessage = "Kart bulunamadı!", Severity = "Warning" }, "Not Found");
+            var card = CardMappers.ToCardDto(dtCard.Rows[0]);
+
+            if (card.Status == CardStatus.Cancelled)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_ALREADY_CANCELLED", ErrorMessage = "Kart zaten iptal durumda.", Severity = "Warning" }, "State");
+            if (card.Status == CardStatus.PendingActivation)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_STATE_INVALID", ErrorMessage = "Aktive edilmemiş kart iptal edilemez.", Severity = "Warning" }, "State");
+
+            decimal outstanding = Math.Abs(card.Balance);
+            if (outstanding > 0 && !request.AcknowledgeOutstandingBalance)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "OUTSTANDING_BALANCE_NOT_ACKNOWLEDGED", ErrorMessage = $"Kartın {outstanding:N2} TL borcu bulunmaktadır. İptal için borç onayı gereklidir.", Severity = "Warning" }, "Balance");
+
+            // Aktif provizyonları void et
+            int voidedCount = _dbManager.ExecuteNonQuery("sp_boa_card_void_active_auths",
+                new Dictionary<string, object> { { "p_card_id", request.CardId }, { "p_reason", $"Kart iptali - {request.CancellationReason}" } });
+            response.VoidedAuthorizationCount = voidedCount;
+
+            var spParams = new Dictionary<string, object>
+            {
+                { "p_card_id", request.CardId },
+                { "p_cancellation_reason", (int)request.CancellationReason },
+                { "p_description", request.Description },
+                { "p_user_id", request.UserId },
+                { "p_channel", request.Channel },
+                { "p_client_ip", request.ClientIp }
+            };
+            DataTable dt = _dbManager.ExecuteReader("sp_boa_card_cancel", spParams);
+            if (dt.Rows.Count == 0)
+                throw new Exception("İptal işlemi yapıldı fakat kart okunamadı.");
+            response.CancelledCard = CardMappers.ToCardDto(dt.Rows[0]);
+            response.OutstandingBalance = outstanding;
+
+            // PayCore senkronu
+            if (!string.IsNullOrEmpty(card.PaycoreReference))
+            {
+                try { _paycoreGateway.SetCardStatus(card.PaycoreReference, CardStatus.Cancelled); }
+                catch (Exception ex)
+                {
+                    _dbManager.ExecuteNonQuery("sp_boa_notification_create", new Dictionary<string, object>
+                    {
+                        { "p_national_id", card.NationalId },
+                        { "p_channel", "SYSTEM" },
+                        { "p_template_key", "PAYCORE_CANCEL_FAILED" },
+                        { "p_message", $"PayCore iptal bildirimi başarısız: {ex.Message}" }
+                    });
+                }
+            }
+
+            response.IsSuccess = true;
+            response.ResultMessage = $"Kart başarıyla iptal edildi. {voidedCount} provizyon void edildi.";
+        }
+        catch (FaultException<BankingFault>) { response.IsSuccess = false; throw; }
+        catch (Exception ex) { response.IsSuccess = false; response.ErrorCode = "CANCEL_FAILED"; response.ErrorMessage = ex.Message; throw new FaultException<BankingFault>(new BankingFault { ErrorCode = response.ErrorCode, ErrorMessage = response.ErrorMessage, Severity = "Error" }, "Error"); }
+        finally { stopwatch.Stop(); response.ExecutionTimeMs = stopwatch.ElapsedMilliseconds; LogWcfCall("CancelCard", request, response); }
+        return response;
+    }
+
+    public RenewCardResponse RenewCard(RenewCardRequest request)
+    {
+        CheckRole("BranchTeller");
+        var response = new RenewCardResponse();
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            DataTable dtCard = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_card_id", request.CardId } });
+            if (dtCard.Rows.Count == 0)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_NOT_FOUND", ErrorMessage = "Kart bulunamadı!", Severity = "Warning" }, "Not Found");
+            var oldCard = CardMappers.ToCardDto(dtCard.Rows[0]);
+
+            if (oldCard.Status == CardStatus.Cancelled)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_CANCELLED", ErrorMessage = "İptal edilmiş kart yenilenemez.", Severity = "Warning" }, "State");
+            if (oldCard.ReplacedByCardId.HasValue)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_ALREADY_RENEWED", ErrorMessage = "Bu kart zaten yenilenmiş.", Severity = "Warning" }, "State");
+
+            // Aynı PAN ile yeni kart oluştur
+            var newCard = CreateReplacementCard(oldCard, samePan: true, oldCard.CardHolderName, null,
+                request.UserId, request.Channel, request.ClientIp);
+
+            // PayCore'a yenilemeyi bildir
+            if (!string.IsNullOrEmpty(oldCard.PaycoreReference))
+            {
+                try { _paycoreGateway.RenewCard(oldCard.PaycoreReference, newCard.ExpiryDate); }
+                catch (Exception ex)
+                {
+                    _dbManager.ExecuteNonQuery("sp_boa_notification_create", new Dictionary<string, object>
+                    {
+                        { "p_national_id", oldCard.NationalId },
+                        { "p_channel", "SYSTEM" },
+                        { "p_template_key", "PAYCORE_RENEW_FAILED" },
+                        { "p_message", $"PayCore yenileme bildirimi başarısız: {ex.Message}" }
+                    });
+                }
+            }
+
+            response.OldCard = oldCard;
+            response.NewCard = newCard;
+            response.IsSuccess = true;
+            response.ResultMessage = "Yeni kart oluşturuldu, aktivasyon bekleniyor. Eski kart aktif kalmaya devam ediyor.";
+        }
+        catch (FaultException<BankingFault>) { response.IsSuccess = false; throw; }
+        catch (Exception ex) { response.IsSuccess = false; response.ErrorCode = "RENEW_FAILED"; response.ErrorMessage = ex.Message; throw new FaultException<BankingFault>(new BankingFault { ErrorCode = response.ErrorCode, ErrorMessage = response.ErrorMessage, Severity = "Error" }, "Error"); }
+        finally { stopwatch.Stop(); response.ExecutionTimeMs = stopwatch.ElapsedMilliseconds; LogWcfCall("RenewCard", request, response); }
+        return response;
+    }
+
+    public ReissueCardResponse ReissueCard(ReissueCardRequest request)
+    {
+        CheckRole("BranchTeller");
+        var response = new ReissueCardResponse();
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.Description))
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "VALIDATION_ERROR", ErrorMessage = "Yeniden basım açıklaması zorunludur.", Severity = "Warning" }, "Validation");
+            if (request.ReissueReason == ReissueReason.NameChange && string.IsNullOrWhiteSpace(request.NewCardHolderName))
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "VALIDATION_ERROR", ErrorMessage = "İsim değişikliğinde yeni ad zorunludur.", Severity = "Warning" }, "Validation");
+            if ((request.ReissueReason == ReissueReason.CardUpgrade || request.ReissueReason == ReissueReason.CardDowngrade)
+                && (!request.NewCardProduct.HasValue || request.NewCardProduct.Value == 0))
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "VALIDATION_ERROR", ErrorMessage = "Ürün değişikliğinde yeni ürün seçimi zorunludur.", Severity = "Warning" }, "Validation");
+
+            DataTable dtCard = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_card_id", request.CardId } });
+            if (dtCard.Rows.Count == 0)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_NOT_FOUND", ErrorMessage = "Kart bulunamadı!", Severity = "Warning" }, "Not Found");
+            var oldCard = CardMappers.ToCardDto(dtCard.Rows[0]);
+
+            if (oldCard.Status == CardStatus.Cancelled)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_CANCELLED", ErrorMessage = "İptal edilmiş kart yeniden basılamaz.", Severity = "Warning" }, "State");
+            if (oldCard.ReplacedByCardId.HasValue)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_ALREADY_REPLACED", ErrorMessage = "Bu kart zaten yenilenmiş/yeniden basılmış.", Severity = "Warning" }, "State");
+
+            string newName = request.NewCardHolderName ?? oldCard.CardHolderName;
+            CardProduct? newProduct = request.NewCardProduct;
+            bool samePan = request.ReissueReason == ReissueReason.NameChange
+                || request.ReissueReason == ReissueReason.PhysicalDamage
+                || request.ReissueReason == ReissueReason.ChipMalfunction
+                || request.ReissueReason == ReissueReason.SecurityConcern;
+
+            var newCard = CreateReplacementCard(oldCard, samePan, newName, newProduct,
+                request.UserId, request.Channel, request.ClientIp);
+
+            // Reissue'da eski kartı hemen iptal et
+            _dbManager.ExecuteNonQuery("sp_boa_card_void_active_auths",
+                new Dictionary<string, object> { { "p_card_id", oldCard.CardId }, { "p_reason", $"Yeniden basım - {request.ReissueReason}" } });
+            _dbManager.ExecuteReader("sp_boa_card_cancel", new Dictionary<string, object>
+            {
+                { "p_card_id", oldCard.CardId },
+                { "p_cancellation_reason", (int)CancellationReason.CardReplaced },
+                { "p_description", $"Yeniden basım: {request.ReissueReason}" },
+                { "p_user_id", request.UserId },
+                { "p_channel", request.Channel },
+                { "p_client_ip", request.ClientIp }
+            });
+
+            // PayCore'a bildir
+            if (!string.IsNullOrEmpty(oldCard.PaycoreReference))
+            {
+                try
+                {
+                    if (samePan)
+                        _paycoreGateway.RenewCard(oldCard.PaycoreReference, newCard.ExpiryDate);
+                    else
+                        _paycoreGateway.SetCardStatus(oldCard.PaycoreReference, CardStatus.Cancelled);
+                }
+                catch { }
+            }
+
+            // Güncel eski kart bilgisini oku
+            DataTable dtOldUpdated = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_card_id", oldCard.CardId } });
+            if (dtOldUpdated.Rows.Count > 0)
+                response.OldCard = CardMappers.ToCardDto(dtOldUpdated.Rows[0]);
+
+            response.NewCard = newCard;
+            response.IsSuccess = true;
+            response.ResultMessage = "Yeniden basım gerçekleşti. Eski kart iptal edildi, yeni kart aktivasyon bekliyor.";
+        }
+        catch (FaultException<BankingFault>) { response.IsSuccess = false; throw; }
+        catch (Exception ex) { response.IsSuccess = false; response.ErrorCode = "REISSUE_FAILED"; response.ErrorMessage = ex.Message; throw new FaultException<BankingFault>(new BankingFault { ErrorCode = response.ErrorCode, ErrorMessage = response.ErrorMessage, Severity = "Error" }, "Error"); }
+        finally { stopwatch.Stop(); response.ExecutionTimeMs = stopwatch.ElapsedMilliseconds; LogWcfCall("ReissueCard", request, response); }
+        return response;
     }
 }

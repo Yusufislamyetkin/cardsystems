@@ -272,6 +272,50 @@ public class CardApiController : ControllerBase
     }
 
     /// <summary>
+    /// Kayıp/çalıntı kart bildirimi JSON uç noktası.
+    /// </summary>
+    [HttpPost("report-lost-stolen")]
+    public IActionResult ReportLostStolen([FromBody] ReportLostStolenRequest request)
+    {
+        request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        var response = _cardService.ReportLostStolenCard(request);
+        return Ok(response);
+    }
+
+    /// <summary>
+    /// Kart iptali JSON uç noktası.
+    /// </summary>
+    [HttpPost("cancel")]
+    public IActionResult CancelCard([FromBody] CancelCardRequest request)
+    {
+        request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        var response = _cardService.CancelCard(request);
+        return Ok(response);
+    }
+
+    /// <summary>
+    /// Kart yenileme JSON uç noktası.
+    /// </summary>
+    [HttpPost("renew")]
+    public IActionResult RenewCard([FromBody] RenewCardRequest request)
+    {
+        request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        var response = _cardService.RenewCard(request);
+        return Ok(response);
+    }
+
+    /// <summary>
+    /// Kart yeniden basım JSON uç noktası.
+    /// </summary>
+    [HttpPost("reissue")]
+    public IActionResult ReissueCard([FromBody] ReissueCardRequest request)
+    {
+        request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        var response = _cardService.ReissueCard(request);
+        return Ok(response);
+    }
+
+    /// <summary>
     /// İzleme loglarını temizler (Paneli sıfırlamak için).
     /// </summary>
     [HttpPost("/api/tracer/clear")]

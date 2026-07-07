@@ -91,4 +91,20 @@ public interface ICardServiceClient
     [OperationContract]
     [FaultContract(typeof(BankingFault))]
     GetRegulatoryReportResponse GetRegulatoryReport(GetRegulatoryReportRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    ReportLostStolenResponse ReportLostStolenCard(ReportLostStolenRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    CancelCardResponse CancelCard(CancelCardRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    RenewCardResponse RenewCard(RenewCardRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    ReissueCardResponse ReissueCard(ReissueCardRequest request);
 }

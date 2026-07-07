@@ -21,8 +21,12 @@ public sealed class FakePaycoreGateway : IPaycoreGateway
     public bool ThrowOnNextAuthorization { get; set; }
 
     public bool ThrowOnNextIssueCard { get; set; }
+    public bool ThrowOnNextSetCardStatus { get; set; }
+    public bool ThrowOnNextRenewCard { get; set; }
 
     public int IssueCardCallCount { get; private set; }
+    public int SetCardStatusCallCount { get; private set; }
+    public int RenewCardCallCount { get; private set; }
 
     public PaycoreCardResult IssueCard(string maskedPan, string cardHolderName, CardType cardType)
     {
@@ -36,10 +40,26 @@ public sealed class FakePaycoreGateway : IPaycoreGateway
     }
 
     public PaycoreResult SetCardStatus(string paycoreCardReference, CardStatus newStatus)
-        => new() { IsSuccess = true };
+    {
+        SetCardStatusCallCount++;
+        if (ThrowOnNextSetCardStatus)
+        {
+            ThrowOnNextSetCardStatus = false;
+            throw new TimeoutException("Test amaçlı simüle edilmiş PayCore SetCardStatus hatası.");
+        }
+        return new() { IsSuccess = true };
+    }
 
     public PaycoreResult RenewCard(string paycoreCardReference, DateTime newExpiryDate)
-        => new() { IsSuccess = true };
+    {
+        RenewCardCallCount++;
+        if (ThrowOnNextRenewCard)
+        {
+            ThrowOnNextRenewCard = false;
+            throw new TimeoutException("Test amaçlı simüle edilmiş PayCore RenewCard hatası.");
+        }
+        return new() { IsSuccess = true };
+    }
 
     public PaycoreAuthResult Authorize(string paycoreCardReference, decimal amount, string bankReferenceNumber)
     {
