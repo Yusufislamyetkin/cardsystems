@@ -48,12 +48,24 @@ public class CardService : ICardService
     private readonly IPaycoreGateway _paycoreGateway;
 
     /// <summary>
+    /// Rol kontrolü olmadan kart oluşturma — EOD batch gibi sistem süreçleri için.
+    /// </summary>
+    private CreateCardResponse CreateCardInternal(CreateCardRequest request)
+    {
+        return CreateCardCore(request);
+    }
+
+    /// <summary>
     /// Yeni bir kart oluşturur ve karta ait GL Muhasebe Hesabı açar. Kartı kaydetmeden önce şifreyi HSM üzerinde PIN Block'a dönüştürür.
     /// </summary>
     public CreateCardResponse CreateCard(CreateCardRequest request)
     {
         CheckRole("BranchTeller");
+        return CreateCardCore(request);
+    }
 
+    private CreateCardResponse CreateCardCore(CreateCardRequest request)
+    {
         var response = new CreateCardResponse();
         var stopwatch = Stopwatch.StartNew();
 
@@ -75,6 +87,15 @@ public class CardService : ICardService
                 {
                     ErrorCode = "VALIDATION_ERROR",
                     ErrorMessage = "Limit veya bakiye negatif değer olamaz!",
+                    Severity = "Warning"
+                }, "Validation Error");
+            }
+            if (request.CardType == CardType.Debit && request.Limit > 0)
+            {
+                throw new FaultException<BankingFault>(new BankingFault
+                {
+                    ErrorCode = "VALIDATION_ERROR",
+                    ErrorMessage = "Banka kartına (Debit) kredi limiti tanımlanamaz!",
                     Severity = "Warning"
                 }, "Validation Error");
             }
@@ -400,8 +421,8 @@ public class CardService : ICardService
             if (currentCard.Status == CardStatus.Cancelled)
                 throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_STATE_INVALID", ErrorMessage = "İptal edilmiş bir kart yeniden aktifleştirilemez!", Severity = "Warning" }, "State Invalid");
 
-            // PendingActivation kartlara sadece sistem (EOD) dokunabilir, manuel durum değişikliği yapılamaz
-            if (currentCard.Status == CardStatus.PendingActivation && request.NewStatus != CardStatus.Active)
+            // PendingActivation kartlara manuel durum değişikliği yapılamaz
+            if (currentCard.Status == CardStatus.PendingActivation)
                 throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_STATE_INVALID", ErrorMessage = "Aktivasyon bekleyen kartın durumu manuel değiştirilemez!", Severity = "Warning" }, "State Invalid");
 
             // PendingActivation durumuna manuel geçiş engellenir
@@ -1113,7 +1134,7 @@ public class CardService : ICardService
                         UserId = "SYSTEM_BATCH",
                         ClientIp = "127.0.0.1"
                     };
-                    var cardResult = CreateCard(createReq);
+                    var cardResult = CreateCardInternal(createReq);
                     if (cardResult.IsSuccess)
                     {
                         _dbManager.ExecuteReader("sp_boa_application_mark_issued", new Dictionary<string, object>
@@ -1520,14 +1541,16 @@ public class CardService : ICardService
                 throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "APPLICATION_NOT_FOUND", ErrorMessage = "Başvuru bulunamadı!", Severity = "Warning" }, "Not Found");
 
             var app = CardMappers.ToCardApplicationDto(dtApp.Rows[0]);
+
+            // BDDK limit kontrolü en önce (state check'ten önce) yapılır
+            if (request.Approve && request.ApprovedLimit.HasValue && request.ApprovedLimit.Value > app.BddkLimitCap)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "BDDK_LIMIT_EXCEEDED", ErrorMessage = $"Onaylanan limit ({request.ApprovedLimit.Value} TL) BDDK tavanını ({app.BddkLimitCap} TL) aşıyor!", Severity = "Warning" }, "BDDK Cap");
+
             if (app.MakerUserId == request.UserId)
                 throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "FOUR_EYES_VIOLATION", ErrorMessage = "Kararı giren kullanıcı ile onaylayan aynı olamaz (four-eyes principle)!", Severity = "Warning" }, "Four Eyes");
 
             if (app.Status != CardApplicationStatus.ManualReview)
                 throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "APPLICATION_STATE_INVALID", ErrorMessage = "Başvuru manuel değerlendirme aşamasında değil!", Severity = "Warning" }, "State Invalid");
-
-            if (request.Approve && request.ApprovedLimit.HasValue && request.ApprovedLimit.Value > app.BddkLimitCap)
-                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "BDDK_LIMIT_EXCEEDED", ErrorMessage = $"Onaylanan limit ({request.ApprovedLimit.Value} TL) BDDK tavanını ({app.BddkLimitCap} TL) aşıyor!", Severity = "Warning" }, "BDDK Cap");
 
             decimal? finalLimit = null;
             if (request.Approve)
