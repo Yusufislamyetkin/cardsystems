@@ -1,0 +1,46 @@
+# BOA Card Management System — Cline Memory Bank & Token Efficiency Rules
+
+## 🔴 MANDATORY: Memory Bank First
+Her göreve başlarken mutlaka memory-bank/ altındaki tüm dosyaları sırayla oku:
+1. `projectBrief.md`
+2. `productContext.md`
+3. `systemPatterns.md`
+4. `techContext.md`
+5. `activeContext.md`
+6. `progress.md`
+
+Bu dosyalar projenin tam bağlamını taşır. Her büyük değişiklikten sonra bu dosyaları güncelle.
+
+## 🟡 Token Tasarruf Kuralları (TOKEN EFFICIENCY)
+
+### 1. ASLA TÜM DOSYAYI OKUMA — Hedefe Odaklan
+- `read_file` ile BÜTÜN dosyayı okumak yerine `search_files` ile spesifik metodu/regex'i bul, SONRA `start_line`/`end_line` ile sadece ilgili bölümü oku
+- Örn: `CardService.cs` 1700 satır → `search_files` ile metod adını bul → sadece o metodun olduğu 30-50 satırı oku
+- `list_code_definition_names` ile sınıf/metod listesini al, ihtiyacın olanı seç
+
+### 2. GEREKSİZ KOMUTLARDAN KAÇIN
+- `dotnet build` her değişiklikten sonra değil, SADECE tüm değişiklikler bittiğinde çalıştır
+- Git log/status için basit komutlar kullan: `git log --oneline -5` yeterli
+- Uzun çıktılı test/derleme komutlarını `2>&1 | tail -20` gibi filtrele
+
+### 3. TEK SEFERDE ÇOKLU DEĞİŞİKLİK
+- Aynı dosyada birden fazla değişiklik varsa, TEK `replace_in_file` çağrısında multiple SEARCH/REPLACE blokları kullan
+- Her küçük değişiklik için ayrı ayrı replace_in_file yapma
+
+### 4. GEREKSİZ OKUMALARI ENGELLE
+- Zaten bu oturumda okuduğun bir dosyayı tekrar okuma
+- `list_files` recursive kullanma, sadece ihtiyacın olan dizini recursive yap
+- `access_mcp_resource` veya `use_mcp_tool` sadece gerçekten gerekliyse kullan
+
+### 5. ÇIKTI FİLTRELEME
+- `execute_command` çıktılarında hata/uyarı dışındaki satırları filtrele
+- Build çıktısında sadece "Error" ve "Warning" satırlarını göster
+
+## 🟢 Test Durumu (son güncelleme: 2026-07-07)
+- 60/83 test passing ✅
+- 23 failing: PayCore gateway ve maker-checker testleri (önceden mevcut, kart değişiklikleriyle ilgili değil)
+
+## Git
+- Remote: `origin: https://github.com/Yusufislamyetkin/cardsystems.git`
+- Branch: `main`
+- PowerShell'de `&&` çalışmaz, `;` kullan
