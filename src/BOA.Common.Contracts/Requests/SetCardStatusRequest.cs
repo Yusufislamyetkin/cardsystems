@@ -29,6 +29,18 @@ public class SetCardStatusRequest : RequestBase
     /// </summary>
     [DataMember]
     public string Reason { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Bloke nedeni (opsiyonel). Sadece Blocked durumuna geçerken anlamlıdır.
+    /// </summary>
+    [DataMember]
+    public BlockReason? BlockReason { get; set; }
+
+    /// <summary>
+    /// İptal nedeni (opsiyonel). Sadece Cancelled durumuna geçerken anlamlıdır.
+    /// </summary>
+    [DataMember]
+    public CancellationReason? CancellationReason { get; set; }
 }
 
 /// <summary>

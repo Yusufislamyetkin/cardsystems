@@ -34,7 +34,31 @@ internal static class CardMappers
             Cvv2Hash = row.Table.Columns.Contains("cvv2_hash") && row["cvv2_hash"] != DBNull.Value ? row["cvv2_hash"].ToString() : null,
             CvvHash = row.Table.Columns.Contains("cvv_hash") && row["cvv_hash"] != DBNull.Value ? row["cvv_hash"].ToString() : null,
             ServiceCode = row.Table.Columns.Contains("service_code") ? (row["service_code"].ToString() ?? "201") : "201",
-            Track2Data = row.Table.Columns.Contains("track2_data") && row["track2_data"] != DBNull.Value ? row["track2_data"].ToString() : null
+            Track2Data = row.Table.Columns.Contains("track2_data") && row["track2_data"] != DBNull.Value ? row["track2_data"].ToString() : null,
+            BlockReason = row.Table.Columns.Contains("block_reason") && row["block_reason"] != DBNull.Value ? (BlockReason)Convert.ToInt32(row["block_reason"]) : null,
+            BlockedDate = row.Table.Columns.Contains("blocked_date") && row["blocked_date"] != DBNull.Value ? Convert.ToDateTime(row["blocked_date"]) : null,
+            CancelledDate = row.Table.Columns.Contains("cancelled_date") && row["cancelled_date"] != DBNull.Value ? Convert.ToDateTime(row["cancelled_date"]) : null,
+            CancellationReason = row.Table.Columns.Contains("cancellation_reason") && row["cancellation_reason"] != DBNull.Value ? (CancellationReason)Convert.ToInt32(row["cancellation_reason"]) : null,
+            PreviousCardId = row.Table.Columns.Contains("previous_card_id") && row["previous_card_id"] != DBNull.Value ? Convert.ToInt32(row["previous_card_id"]) : null,
+            ReplacedByCardId = row.Table.Columns.Contains("replaced_by_card_id") && row["replaced_by_card_id"] != DBNull.Value ? Convert.ToInt32(row["replaced_by_card_id"]) : null
+        };
+    }
+
+    public static CardBlockHistoryDto ToCardBlockHistoryDto(DataRow row)
+    {
+        return new CardBlockHistoryDto
+        {
+            BlockHistoryId = Convert.ToInt32(row["block_history_id"]),
+            CardId = Convert.ToInt32(row["card_id"]),
+            BlockReason = (BlockReason)Convert.ToInt32(row["block_reason"]),
+            IsEmergency = Convert.ToBoolean(row["is_emergency"]),
+            Description = row["description"].ToString() ?? string.Empty,
+            PoliceReportNumber = row["police_report_number"] != DBNull.Value ? row["police_report_number"].ToString() : null,
+            LastKnownTransactionRef = row["last_known_transaction_ref"] != DBNull.Value ? row["last_known_transaction_ref"].ToString() : null,
+            ReplacementRequested = Convert.ToBoolean(row["replacement_requested"]),
+            ReplacementCardId = row["replacement_card_id"] != DBNull.Value ? Convert.ToInt32(row["replacement_card_id"]) : null,
+            UserId = row["user_id"].ToString() ?? string.Empty,
+            CreatedDate = Convert.ToDateTime(row["created_date"])
         };
     }
 

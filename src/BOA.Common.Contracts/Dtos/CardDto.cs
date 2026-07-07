@@ -196,4 +196,42 @@ public class CardDto
     /// Son kullanma tarihini MM/YY formatında döndürür (kart ön yüz gösterimi için).
     /// </summary>
     public string ExpiryDisplay => ExpiryDate.ToString("MM/yy");
+
+    /// <summary>
+    /// Kartın bloke edilme nedeni. Sadece status Blocked iken anlamlıdır.
+    /// </summary>
+    [DataMember]
+    public BlockReason? BlockReason { get; set; }
+
+    /// <summary>
+    /// Kartın bloke edildiği tarih.
+    /// </summary>
+    [DataMember]
+    public DateTime? BlockedDate { get; set; }
+
+    /// <summary>
+    /// Kartın iptal edildiği tarih. Sadece status Cancelled iken anlamlıdır.
+    /// </summary>
+    [DataMember]
+    public DateTime? CancelledDate { get; set; }
+
+    /// <summary>
+    /// Kartın iptal edilme nedeni. Sadece status Cancelled iken anlamlıdır.
+    /// </summary>
+    [DataMember]
+    public CancellationReason? CancellationReason { get; set; }
+
+    /// <summary>
+    /// Yenileme/reissue zincirinde bu kartın öncesindeki kartın ID'si.
+    /// Yeni kartın previous_card_id'si, eski kartına işaret eder.
+    /// </summary>
+    [DataMember]
+    public int? PreviousCardId { get; set; }
+
+    /// <summary>
+    /// Yenileme/reissue zincirinde bu kartı devralan yeni kartın ID'si.
+    /// Eski kartın replaced_by_card_id'si, yeni karta işaret eder.
+    /// </summary>
+    [DataMember]
+    public int? ReplacedByCardId { get; set; }
 }

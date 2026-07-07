@@ -34,5 +34,5 @@ dotnet test src/BOA.Tests/BOA.Tests.csproj
 
 ## Test Status (as of 2026-07-07)
 - 83 total tests
-- 60 passing ✅
-- 23 failing (pre-existing: PayCore gateway, maker-checker tests unrelated to card creation changes)
+- 83 passing ✅
+- 0 failing

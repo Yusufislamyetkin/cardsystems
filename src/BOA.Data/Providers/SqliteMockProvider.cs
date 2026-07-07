@@ -106,6 +106,12 @@ public class SqliteMockProvider : IBoaDbProvider
                     cvv_hash TEXT NULL,                         -- CVV (manyetik şerit) hash
                     service_code TEXT NOT NULL DEFAULT '201',   -- EMV Service Code
                     track2_data TEXT NULL,                      -- Track2 eşdeğer verisi
+                    block_reason INTEGER NULL,                   -- BlockReason enum (sadece status=2 iken anlamlı)
+                    blocked_date TEXT NULL,                      -- bloke tarihi
+                    cancelled_date TEXT NULL,                    -- iptal tarihi
+                    cancellation_reason INTEGER NULL,             -- CancellationReason enum
+                    previous_card_id INTEGER NULL,               -- yenileme/reissue: önceki kart
+                    replaced_by_card_id INTEGER NULL,            -- yenileme/reissue: bu kartı devralan yeni kart
                     created_date TEXT NOT NULL,
                     FOREIGN KEY(account_id) REFERENCES boa_accounts(account_id),
                     FOREIGN KEY(customer_id) REFERENCES boa_customers(customer_id),
@@ -211,6 +217,26 @@ public class SqliteMockProvider : IBoaDbProvider
             using (var cmd = new SqliteCommand(createAuditTable, connection)) { cmd.ExecuteNonQuery(); }
             using (var cmd = new SqliteCommand(createPaycoreOutboxTable, connection)) { cmd.ExecuteNonQuery(); }
 
+            // 5b. Kart Bloke Geçmişi Tablosu — kayıp/çalıntı bildirimi denetim izi.
+            string createBlockHistoryTable = @"
+                CREATE TABLE IF NOT EXISTS boa_card_block_history (
+                    block_history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    card_id INTEGER NOT NULL,
+                    block_reason INTEGER NOT NULL,
+                    is_emergency INTEGER NOT NULL DEFAULT 0,
+                    description TEXT NOT NULL,
+                    police_report_number TEXT NULL,
+                    last_known_transaction_ref TEXT NULL,
+                    replacement_requested INTEGER NOT NULL DEFAULT 0,
+                    replacement_card_id INTEGER NULL,
+                    user_id TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    client_ip TEXT NOT NULL,
+                    created_date TEXT NOT NULL,
+                    FOREIGN KEY(card_id) REFERENCES boa_cards(card_id)
+                );";
+            using (var cmd = new SqliteCommand(createBlockHistoryTable, connection)) { cmd.ExecuteNonQuery(); }
+
             // 6. Limit Artış Talepleri Tablosu — Maker-Checker (çift onay) akışının veri katmanı.
             string createLimitChangeRequestsTable = @"
                 CREATE TABLE IF NOT EXISTS boa_limit_change_requests (
@@ -315,6 +341,12 @@ public class SqliteMockProvider : IBoaDbProvider
             TryAddColumn(connection, "boa_cards", "cvv_hash", "TEXT NULL");
             TryAddColumn(connection, "boa_cards", "service_code", "TEXT NOT NULL DEFAULT '201'");
             TryAddColumn(connection, "boa_cards", "track2_data", "TEXT NULL");
+            TryAddColumn(connection, "boa_cards", "block_reason", "INTEGER NULL");
+            TryAddColumn(connection, "boa_cards", "blocked_date", "TEXT NULL");
+            TryAddColumn(connection, "boa_cards", "cancelled_date", "TEXT NULL");
+            TryAddColumn(connection, "boa_cards", "cancellation_reason", "INTEGER NULL");
+            TryAddColumn(connection, "boa_cards", "previous_card_id", "INTEGER NULL");
+            TryAddColumn(connection, "boa_cards", "replaced_by_card_id", "INTEGER NULL");
         }
     }
 
@@ -432,6 +464,60 @@ public class SqliteMockProvider : IBoaDbProvider
                     using (var reader = selectRenewedCmd.ExecuteReader())
                     {
                         LoadReaderIntoTable(dt, reader);
+                    }
+                    break;
+
+                case "sp_boa_card_report_lost_stolen":
+                    ExecuteReportLostStolen(connection, parameters);
+                    var selectBlockedCmd = new SqliteCommand(CardWithCustomerSelect + " WHERE c.card_id = @cardId", connection);
+                    selectBlockedCmd.Parameters.AddWithValue("@cardId", parameters["p_card_id"]);
+                    using (var reader = selectBlockedCmd.ExecuteReader())
+                    {
+                        LoadReaderIntoTable(dt, reader);
+                    }
+                    break;
+
+                case "sp_boa_card_void_active_auths":
+                    {
+                        int voidedCount = ExecuteVoidActiveAuths(connection, parameters);
+                        dt.Columns.Add("voided_count", typeof(int));
+                        var vrow = dt.NewRow();
+                        vrow["voided_count"] = voidedCount;
+                        dt.Rows.Add(vrow);
+                    }
+                    break;
+
+                case "sp_boa_card_cancel":
+                    ExecuteCancelCard(connection, parameters);
+                    var selectCancelledCmd = new SqliteCommand(CardWithCustomerSelect + " WHERE c.card_id = @cardId", connection);
+                    selectCancelledCmd.Parameters.AddWithValue("@cardId", parameters["p_card_id"]);
+                    using (var reader = selectCancelledCmd.ExecuteReader())
+                    {
+                        LoadReaderIntoTable(dt, reader);
+                    }
+                    break;
+
+                case "sp_boa_card_create_replacement":
+                    ExecuteCreateReplacement(connection, parameters);
+                    var selectReplCmd = new SqliteCommand(CardWithCustomerSelect + " WHERE c.card_id = @cardId", connection);
+                    selectReplCmd.Parameters.AddWithValue("@cardId", parameters["p_new_card_id"]);
+                    using (var reader = selectReplCmd.ExecuteReader())
+                    {
+                        LoadReaderIntoTable(dt, reader);
+                    }
+                    break;
+
+                case "sp_boa_card_set_replacement_link":
+                    {
+                        using var cmd = new SqliteCommand(
+                            "UPDATE boa_cards SET replaced_by_card_id = @newId WHERE card_id = @oldId", connection);
+                        cmd.Parameters.AddWithValue("@newId", parameters["p_new_card_id"]);
+                        cmd.Parameters.AddWithValue("@oldId", parameters["p_previous_card_id"]);
+                        cmd.ExecuteNonQuery();
+                        dt.Columns.Add("result", typeof(string));
+                        var row = dt.NewRow();
+                        row["result"] = "OK";
+                        dt.Rows.Add(row);
                     }
                     break;
 
@@ -1448,6 +1534,192 @@ public class SqliteMockProvider : IBoaDbProvider
             tx.Rollback();
             throw;
         }
+    }
+
+    private void ExecuteReportLostStolen(SqliteConnection conn, Dictionary<string, object> parameters)
+    {
+        using var tx = conn.BeginTransaction();
+        try
+        {
+            int cardId = Convert.ToInt32(parameters["p_card_id"]);
+            int blockReason = Convert.ToInt32(parameters["p_block_reason"]);
+            string description = parameters["p_description"].ToString() ?? string.Empty;
+            string? policeReport = parameters.TryGetValue("p_police_report_number", out var prn) && prn != null && prn != DBNull.Value ? prn.ToString() : null;
+            string? lastKnownRef = parameters.TryGetValue("p_last_known_transaction_ref", out var lk) && lk != null && lk != DBNull.Value ? lk.ToString() : null;
+            bool requestReplacement = parameters.TryGetValue("p_request_replacement", out var rr) && Convert.ToBoolean(rr);
+            int? replacementCardId = parameters.TryGetValue("p_replacement_card_id", out var rcid) && rcid != null && rcid != DBNull.Value ? Convert.ToInt32(rcid) : null;
+            string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+
+            using (var cmd = new SqliteCommand(
+                "UPDATE boa_cards SET status = 2, block_reason = @reason, blocked_date = @date WHERE card_id = @id", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@reason", blockReason);
+                cmd.Parameters.AddWithValue("@date", now);
+                cmd.Parameters.AddWithValue("@id", cardId);
+                cmd.ExecuteNonQuery();
+            }
+            using (var cmd = new SqliteCommand(@"
+                INSERT INTO boa_card_block_history (card_id, block_reason, is_emergency, description, police_report_number, last_known_transaction_ref, replacement_requested, replacement_card_id, user_id, channel, client_ip, created_date)
+                VALUES (@cardId, @reason, 1, @desc, @police, @lastRef, @reqRepl, @replCardId, @user, @channel, @ip, @date);", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cardId", cardId);
+                cmd.Parameters.AddWithValue("@reason", blockReason);
+                cmd.Parameters.AddWithValue("@desc", description);
+                cmd.Parameters.AddWithValue("@police", (object?)policeReport ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@lastRef", (object?)lastKnownRef ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@reqRepl", requestReplacement ? 1 : 0);
+                cmd.Parameters.AddWithValue("@replCardId", (object?)replacementCardId ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@user", parameters["p_user_id"]);
+                cmd.Parameters.AddWithValue("@channel", parameters["p_channel"]);
+                cmd.Parameters.AddWithValue("@ip", parameters["p_client_ip"]);
+                cmd.Parameters.AddWithValue("@date", now);
+                cmd.ExecuteNonQuery();
+            }
+            using (var cmd = new SqliteCommand(@"
+                INSERT INTO boa_card_audit_log (card_id, operation_type, old_value, new_value, reason, user_id, channel, client_ip, log_date)
+                VALUES (@cardId, 'LOST_STOLEN_BLOCK', '1', '2', @desc, @user, @channel, @ip, @date);", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cardId", cardId);
+                cmd.Parameters.AddWithValue("@desc", description);
+                cmd.Parameters.AddWithValue("@user", parameters["p_user_id"]);
+                cmd.Parameters.AddWithValue("@channel", parameters["p_channel"]);
+                cmd.Parameters.AddWithValue("@ip", parameters["p_client_ip"]);
+                cmd.Parameters.AddWithValue("@date", now);
+                cmd.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+        catch { tx.Rollback(); throw; }
+    }
+
+    private int ExecuteVoidActiveAuths(SqliteConnection conn, Dictionary<string, object> parameters)
+    {
+        int cardId = Convert.ToInt32(parameters["p_card_id"]);
+        string reason = parameters["p_reason"].ToString() ?? "UNKNOWN";
+        using var cmd = new SqliteCommand(@"
+            UPDATE boa_authorizations SET status = 3, description = description || ' | AUTO_VOID: ' || @reason
+            WHERE card_id = @id AND status = 1;
+            SELECT changes();", conn);
+        cmd.Parameters.AddWithValue("@id", cardId);
+        cmd.Parameters.AddWithValue("@reason", reason);
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    private void ExecuteCancelCard(SqliteConnection conn, Dictionary<string, object> parameters)
+    {
+        using var tx = conn.BeginTransaction();
+        try
+        {
+            int cardId = Convert.ToInt32(parameters["p_card_id"]);
+            int cancelReason = Convert.ToInt32(parameters["p_cancellation_reason"]);
+            string description = parameters["p_description"].ToString() ?? string.Empty;
+            string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            using (var cmd = new SqliteCommand(
+                "UPDATE boa_cards SET status = 3, cancelled_date = @date, cancellation_reason = @reason WHERE card_id = @id", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@reason", cancelReason);
+                cmd.Parameters.AddWithValue("@date", now);
+                cmd.Parameters.AddWithValue("@id", cardId);
+                cmd.ExecuteNonQuery();
+            }
+            using (var cmd = new SqliteCommand(@"
+                INSERT INTO boa_card_audit_log (card_id, operation_type, old_value, new_value, reason, user_id, channel, client_ip, log_date)
+                VALUES (@cardId, 'CARD_CANCELLED', '1', '3', @desc, @user, @channel, @ip, @date);", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cardId", cardId);
+                cmd.Parameters.AddWithValue("@desc", description);
+                cmd.Parameters.AddWithValue("@user", parameters["p_user_id"]);
+                cmd.Parameters.AddWithValue("@channel", parameters["p_channel"]);
+                cmd.Parameters.AddWithValue("@ip", parameters["p_client_ip"]);
+                cmd.Parameters.AddWithValue("@date", now);
+                cmd.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+        catch { tx.Rollback(); throw; }
+    }
+
+    private void ExecuteCreateReplacement(SqliteConnection conn, Dictionary<string, object> parameters)
+    {
+        using var tx = conn.BeginTransaction();
+        try
+        {
+            string maskedCardNo = parameters["p_card_number"].ToString() ?? "";
+            string holderName = parameters["p_card_holder_name"].ToString() ?? "";
+            int cardType = Convert.ToInt32(parameters["p_card_type"]);
+            int cardBrand = Convert.ToInt32(parameters["p_card_brand"]);
+            int cardProduct = Convert.ToInt32(parameters["p_card_product"]);
+            DateTime expiry = Convert.ToDateTime(parameters["p_expiry_date"]);
+            decimal limit = Convert.ToDecimal(parameters["p_limit"]);
+            decimal balance = Convert.ToDecimal(parameters["p_initial_balance"]);
+            int oldCardId = Convert.ToInt32(parameters["p_previous_card_id"]);
+            string userId = parameters["p_user_id"].ToString() ?? "";
+            string channel = parameters["p_channel"].ToString() ?? "";
+            string clientIp = parameters["p_client_ip"].ToString() ?? "";
+            string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+
+            int customerId, bankAccountId, accountId;
+            using (var cmd = new SqliteCommand("SELECT customer_id, bank_account_id, account_id FROM boa_cards WHERE card_id = @id", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@id", oldCardId);
+                using var r = cmd.ExecuteReader();
+                if (!r.Read()) throw new Exception("Eski kart bulunamadi.");
+                customerId = r.GetInt32(0); bankAccountId = r.GetInt32(1); accountId = r.GetInt32(2);
+            }
+
+            string insertSql = @"
+                INSERT INTO boa_cards (card_number, encrypted_pan, pin_hash, card_holder_name, emboss_name, card_type, card_brand, card_product, expiry_date, status, card_limit, balance, account_id, customer_id, bank_account_id, cvv2_hash, cvv_hash, service_code, track2_data, previous_card_id, created_date)
+                VALUES (@num, @enc, @pin, @name, @emboss, @type, @brand, @product, @expiry, @status, @limit, @balance, @accId, @custId, @bankAccId, @cvv2h, @cvvh, @svc, @track2, @prevCardId, @created); SELECT last_insert_rowid();";
+
+            int newCardId;
+            using (var cmd = new SqliteCommand(insertSql, conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@num", maskedCardNo);
+                cmd.Parameters.AddWithValue("@enc", parameters["p_encrypted_pan"]);
+                cmd.Parameters.AddWithValue("@pin", DBNull.Value);
+                cmd.Parameters.AddWithValue("@name", holderName);
+                cmd.Parameters.AddWithValue("@emboss", parameters.TryGetValue("p_emboss_name", out var emb) ? emb?.ToString() ?? "" : "");
+                cmd.Parameters.AddWithValue("@type", cardType);
+                cmd.Parameters.AddWithValue("@brand", cardBrand);
+                cmd.Parameters.AddWithValue("@product", cardProduct);
+                cmd.Parameters.AddWithValue("@expiry", expiry.ToString("yyyy-MM-dd HH:mm:ss"));
+                cmd.Parameters.AddWithValue("@status", 4);
+                cmd.Parameters.AddWithValue("@limit", limit);
+                cmd.Parameters.AddWithValue("@balance", balance);
+                cmd.Parameters.AddWithValue("@accId", accountId);
+                cmd.Parameters.AddWithValue("@custId", customerId);
+                cmd.Parameters.AddWithValue("@bankAccId", bankAccountId);
+                cmd.Parameters.AddWithValue("@cvv2h", parameters.TryGetValue("p_cvv2_hash", out var cvv2h) ? cvv2h?.ToString() : (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@cvvh", parameters.TryGetValue("p_cvv_hash", out var cvvh) ? cvvh?.ToString() : (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@svc", parameters.TryGetValue("p_service_code", out var svc) ? svc?.ToString() ?? "201" : "201");
+                cmd.Parameters.AddWithValue("@track2", parameters.TryGetValue("p_track2_data", out var trk2) ? trk2?.ToString() : (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@prevCardId", oldCardId);
+                cmd.Parameters.AddWithValue("@created", now);
+                newCardId = Convert.ToInt32(cmd.ExecuteScalar());
+            }
+
+            using (var cmd = new SqliteCommand("UPDATE boa_cards SET replaced_by_card_id = @newId WHERE card_id = @oldId", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@newId", newCardId); cmd.Parameters.AddWithValue("@oldId", oldCardId);
+                cmd.ExecuteNonQuery();
+            }
+
+            using (var cmd = new SqliteCommand(@"
+                INSERT INTO boa_card_audit_log (card_id, operation_type, old_value, new_value, reason, user_id, channel, client_ip, log_date)
+                VALUES (@cardId, 'CARD_REPLACEMENT_CREATED', NULL, @newVal, 'Kart yenileme/yeniden basim', @user, @channel, @ip, @date);", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cardId", newCardId);
+                cmd.Parameters.AddWithValue("@newVal", maskedCardNo);
+                cmd.Parameters.AddWithValue("@user", userId);
+                cmd.Parameters.AddWithValue("@channel", channel);
+                cmd.Parameters.AddWithValue("@ip", clientIp);
+                cmd.Parameters.AddWithValue("@date", now);
+                cmd.ExecuteNonQuery();
+            }
+            parameters["p_new_card_id"] = newCardId;
+            tx.Commit();
+        }
+        catch { tx.Rollback(); throw; }
     }
 
     /// <summary>

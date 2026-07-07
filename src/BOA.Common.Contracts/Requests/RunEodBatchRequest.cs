@@ -33,4 +33,7 @@ public class RunEodBatchResponse : ResponseBase
 
     [DataMember]
     public int ApplicationsExpired { get; set; }
+
+    [DataMember]
+    public int ReplacementCardsIssued { get; set; }
 }

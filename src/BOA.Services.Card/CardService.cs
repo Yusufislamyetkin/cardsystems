@@ -346,41 +346,83 @@ public class CardService : ICardService
         try
         {
             if (request.NewLimit < 0)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "VALIDATION_ERROR", ErrorMessage = "Yeni limit değeri sıfırdan küçük olamaz!", Severity = "Warning" }, "Validation Error");
+
+            if (string.IsNullOrWhiteSpace(request.Reason))
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "VALIDATION_ERROR", ErrorMessage = "Limit değişikliği için bir gerekçe (Reason) girilmesi zorunludur!", Severity = "Warning" }, "Validation Error");
+
+            DataTable dtCard = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_card_id", request.CardId } });
+            if (dtCard.Rows.Count == 0)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_NOT_FOUND", ErrorMessage = "Kart bulunamadı!", Severity = "Warning" }, "Not Found");
+
+            var currentCard = CardMappers.ToCardDto(dtCard.Rows[0]);
+
+            if (currentCard.Status == CardStatus.Cancelled)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_CANCELLED", ErrorMessage = "İptal edilmiş bir kartın limiti değiştirilemez!", Severity = "Warning" }, "State Invalid");
+            if (currentCard.Status == CardStatus.Blocked)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "CARD_BLOCKED", ErrorMessage = "Bloke bir kartın limiti değiştirilemez!", Severity = "Warning" }, "State Invalid");
+            if (currentCard.CardType == CardType.Debit)
+                throw new FaultException<BankingFault>(new BankingFault { ErrorCode = "VALIDATION_ERROR", ErrorMessage = "Debit kartlarda kredi limiti tanımlanamaz!", Severity = "Warning" }, "Validation Error");
+
+            if (request.NewLimit > currentCard.CardLimit)
             {
-                throw new FaultException<BankingFault>(new BankingFault
+                var reqParams = new Dictionary<string, object>
                 {
-                    ErrorCode = "VALIDATION_ERROR",
-                    ErrorMessage = "Yeni limit değeri sıfırdan küçük olamaz!",
-                    Severity = "Warning"
-                }, "Validation Error");
-            }
+                    { "p_card_id", request.CardId },
+                    { "p_current_limit", currentCard.CardLimit },
+                    { "p_requested_limit", request.NewLimit },
+                    { "p_reason", request.Reason },
+                    { "p_maker_user_id", request.UserId }
+                };
+                DataTable dtReq = _dbManager.ExecuteReader("sp_boa_limit_request_create", reqParams);
+                if (dtReq.Rows.Count > 0)
+                    response.PendingRequest = CardMappers.ToLimitChangeRequestDto(dtReq.Rows[0]);
 
-            var dbParams = new Dictionary<string, object>
-            {
-                { "p_card_id", request.CardId },
-                { "p_new_limit", request.NewLimit },
-                { "p_user_id", request.UserId },
-                { "p_channel", request.Channel },
-                { "p_client_ip", request.ClientIp }
-            };
-
-            DataTable dt = _dbManager.ExecuteReader("sp_boa_card_update_limit", dbParams);
-
-            if (dt.Rows.Count > 0)
-            {
-                response.UpdatedCard = CardMappers.ToCardDto(dt.Rows[0]);
+                response.UpdatedCard = currentCard;
                 response.IsSuccess = true;
-                response.ResultMessage = "Kart limiti başarıyla güncellendi.";
+                response.ResultMessage = "Limit artış talebi oluşturuldu, onay bekliyor.";
+            }
+            else if (request.NewLimit < currentCard.CardLimit)
+            {
+                var dbParams = new Dictionary<string, object>
+                {
+                    { "p_card_id", request.CardId },
+                    { "p_new_limit", request.NewLimit },
+                    { "p_user_id", request.UserId },
+                    { "p_channel", request.Channel },
+                    { "p_client_ip", request.ClientIp }
+                };
+                DataTable dt = _dbManager.ExecuteReader("sp_boa_card_update_limit", dbParams);
+                if (dt.Rows.Count > 0)
+                    response.UpdatedCard = CardMappers.ToCardDto(dt.Rows[0]);
+                else
+                    throw new Exception("Kart limiti güncellendi fakat güncel kart bilgisi okunamadı.");
+
+                decimal debt = Math.Abs(response.UpdatedCard.Balance);
+                if (debt > request.NewLimit)
+                    response.IsOverlimit = true;
+
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(currentCard.PaycoreReference))
+                        _paycoreGateway.UpdateLimit(currentCard.PaycoreReference, request.NewLimit);
+                }
+                catch { }
+
+                response.IsSuccess = true;
+                response.ResultMessage = response.IsOverlimit
+                    ? $"Limit düşürüldü ancak mevcut borç ({debt:N2} TL) yeni limitin üzerinde — kart overlimit durumda."
+                    : "Kart limiti başarıyla düşürüldü.";
             }
             else
             {
-                throw new Exception("Kart limiti güncellendi fakat güncel kart bilgisi okunamadı.");
+                response.UpdatedCard = currentCard;
+                response.IsSuccess = true;
+                response.ResultMessage = "Yeni limit mevcut limitle aynı, değişiklik yapılmadı.";
             }
         }
         catch (FaultException<BankingFault> faultEx)
         {
-            // ResponseBase.IsSuccess varsayılan olarak true'dur; bu satır olmadan finally bloğundaki
-            // LogWcfCall, hataen (fault) sonuçlanan çağrıları bile tracer panelinde "SUCCESS" gösteriyordu.
             response.IsSuccess = false;
             response.ErrorCode = faultEx.Detail.ErrorCode;
             response.ErrorMessage = faultEx.Detail.ErrorMessage;
@@ -665,6 +707,58 @@ public class CardService : ICardService
                     response.UpdatedCard = CardMappers.ToCardDto(updatedCardRow);
                 }
 
+                // 5. PayCore entegrasyonu — banka onayladıktan sonra kart ağına bildirim
+                if (request.TransactionType == TransactionType.Purchase || request.TransactionType == TransactionType.Withdrawal)
+                {
+                    string? paycoreRef = response.UpdatedCard?.PaycoreReference;
+                    if (!string.IsNullOrWhiteSpace(paycoreRef))
+                    {
+                        try
+                        {
+                            var paycoreAuth = _paycoreGateway.Authorize(paycoreRef, request.Amount, refNo);
+                            if (!paycoreAuth.IsApproved)
+                            {
+                                // PayCore reddetti — ters kayıt (reversal) ile bakiyeyi geri al
+                                _dbManager.ExecuteReader("sp_boa_card_create_transaction", new Dictionary<string, object>
+                                {
+                                    { "p_card_id", request.CardId },
+                                    { "p_transaction_type", 6 }, // Reversal
+                                    { "p_amount", request.Amount },
+                                    { "p_description", $"REVERSAL: PayCore reddi ({paycoreAuth.ResponseCode})" },
+                                    { "p_reference_number", refNo + "R" },
+                                    { "p_user_id", request.UserId },
+                                    { "p_channel", request.Channel },
+                                    { "p_client_ip", request.ClientIp },
+                                    { "p_merchant_id", request.MerchantId ?? (object)System.DBNull.Value },
+                                    { "p_mcc", request.Mcc ?? (object)System.DBNull.Value }
+                                });
+                                _dbManager.ExecuteReader("sp_boa_paycore_outbox_mark", new Dictionary<string, object>
+                                    { { "p_status", 2 }, { "p_bank_reference_number", refNo }, { "p_last_error", "DECLINED: " + paycoreAuth.ResponseCode } });
+                                throw new FaultException<BankingFault>(new BankingFault
+                                {
+                                    ErrorCode = "PAYCORE_DECLINED",
+                                    ErrorMessage = $"Banka onayladı ancak PayCore provizyonu reddetti. Ters kayıt oluşturuldu. Yanıt: {paycoreAuth.ResponseCode}",
+                                    Severity = "Warning"
+                                }, "PayCore Declined");
+                            }
+                            // PayCore onayladı — outbox'u Confirmed yap
+                            _dbManager.ExecuteReader("sp_boa_paycore_outbox_mark", new Dictionary<string, object>
+                                { { "p_status", 2 }, { "p_bank_reference_number", refNo }, { "p_last_error", (object)System.DBNull.Value } });
+                        }
+                        catch (FaultException<BankingFault>) { throw; }
+                        catch (Exception)
+                        {
+                            // PayCore'a ulaşılamadı — outbox Pending kalır, mutabakat taraması yeniden deneyecek
+                            throw new FaultException<BankingFault>(new BankingFault
+                            {
+                                ErrorCode = "PAYCORE_UNREACHABLE",
+                                ErrorMessage = "Banka onayladı ancak PayCore'a ulaşılamadı. İşlem askıda — mutabakat taraması yeniden deneyecek.",
+                                Severity = "Warning"
+                            }, "PayCore Unreachable");
+                        }
+                    }
+                }
+
                 response.IsSuccess = true;
                 response.ResultMessage = $"İşlem onaylandı ve çift kayıtlı muhasebe yevmiye girişi oluşturuldu. Ref No: {refNo}";
             }
@@ -675,8 +769,6 @@ public class CardService : ICardService
         }
         catch (FaultException<BankingFault> faultEx)
         {
-            // ResponseBase.IsSuccess varsayılan olarak true'dur; bu satır olmadan finally bloğundaki
-            // LogWcfCall, hataen (fault) sonuçlanan çağrıları bile tracer panelinde "SUCCESS" gösteriyordu.
             response.IsSuccess = false;
             response.ErrorCode = faultEx.Detail.ErrorCode;
             response.ErrorMessage = faultEx.Detail.ErrorMessage;
@@ -854,6 +946,49 @@ public class CardService : ICardService
             }
 
             response.Authorization = CardMappers.ToAuthorizationDto(dtAuth.Rows[0]);
+
+            // Banka onayladıysa PayCore'a gönder
+            if (response.Authorization.ResponseCode == AuthResponseCode.Approved)
+            {
+                DataTable dtCardForPaycore = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_card_id", request.CardId } });
+                string? paycoreRef = dtCardForPaycore.Rows.Count > 0 ? CardMappers.ToCardDto(dtCardForPaycore.Rows[0]).PaycoreReference : null;
+
+                if (!string.IsNullOrWhiteSpace(paycoreRef))
+                {
+                    try
+                    {
+                        var paycoreAuth = _paycoreGateway.Authorize(paycoreRef, request.Amount, refNo);
+                        if (paycoreAuth.IsApproved)
+                        {
+                            // PayCore onayladı — referansı kaydet
+                            var dtUpdatedAuth = _dbManager.ExecuteReader("sp_boa_auth_set_paycore_reference", new Dictionary<string, object>
+                            {
+                                { "p_authorization_id", response.Authorization.AuthorizationId },
+                                { "p_paycore_auth_reference", paycoreAuth.PaycoreAuthReference ?? "" }
+                            });
+                            if (dtUpdatedAuth.Rows.Count > 0)
+                                response.Authorization = CardMappers.ToAuthorizationDto(dtUpdatedAuth.Rows[0]);
+                        }
+                        else
+                        {
+                            // PayCore reddetti — holdü geri al
+                            var dtOverride = _dbManager.ExecuteReader("sp_boa_auth_override_decline", new Dictionary<string, object>
+                            {
+                                { "p_authorization_id", response.Authorization.AuthorizationId },
+                                { "p_response_code", (int)AuthResponseCode.DoNotHonor },
+                                { "p_reason", paycoreAuth.ErrorMessage ?? "PayCore declined" }
+                            });
+                            if (dtOverride.Rows.Count > 0)
+                                response.Authorization = CardMappers.ToAuthorizationDto(dtOverride.Rows[0]);
+                        }
+                    }
+                    catch
+                    {
+                        // PayCore'a ulaşılamadı — hold duruyor, paycore_auth_reference null kalacak
+                    }
+                }
+            }
+
             response.IsSuccess = true;
             response.ResultMessage = response.Authorization.ResponseCode == AuthResponseCode.Approved
                 ? $"Provizyon onaylandı. Provizyon Kodu: {response.Authorization.AuthorizationCode}"
@@ -1459,7 +1594,7 @@ public class CardService : ICardService
             decimal? approvedLimit = null;
             string reason = "";
 
-            if (creditScore >= 1300)
+            if (creditScore >= 1100)
             {
                 status = CardApplicationStatus.AutoApproved;
                 approvedLimit = Math.Min(request.RequestedLimit, bddkCap);
@@ -1697,10 +1832,23 @@ public class CardService : ICardService
                 { "p_checker_user_id", request.UserId },
                 { "p_decision_note", request.DecisionNote ?? "" }
             };
-            _dbManager.ExecuteReader("sp_boa_limit_request_decide", dbParams);
+            var dtDecide = _dbManager.ExecuteReader("sp_boa_limit_request_decide", dbParams);
+            if (dtDecide.Rows.Count > 0)
+                response.DecidedRequest = CardMappers.ToLimitChangeRequestDto(dtDecide.Rows[0]);
             if (request.Approve)
             {
                 _dbManager.ExecuteReader("sp_boa_card_update_limit", new Dictionary<string, object> { { "p_card_id", lr.CardId }, { "p_new_limit", lr.RequestedLimit }, { "p_user_id", request.UserId }, { "p_channel", request.Channel }, { "p_client_ip", request.ClientIp } });
+                try
+                {
+                    DataTable dtCardForPaycore = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_card_id", lr.CardId } });
+                    if (dtCardForPaycore.Rows.Count > 0)
+                    {
+                        var c = CardMappers.ToCardDto(dtCardForPaycore.Rows[0]);
+                        if (!string.IsNullOrWhiteSpace(c.PaycoreReference))
+                            _paycoreGateway.UpdateLimit(c.PaycoreReference, lr.RequestedLimit);
+                    }
+                }
+                catch { }
             }
             DataTable dtCard = _dbManager.ExecuteReader("sp_boa_card_get_list", new Dictionary<string, object> { { "p_card_id", lr.CardId } });
             if (dtCard.Rows.Count > 0)
@@ -1797,18 +1945,8 @@ public class CardService : ICardService
     /// </summary>
     private static int ComputeCreditScore(string nationalId, decimal income)
     {
-        int baseScore = nationalId switch
-        {
-            "11111111111" => 1308,
-            "22222222222" => 1400,
-            "33333333333" => 750,
-            "50000000000" => 486,
-            "60000000000" => 823,
-            _ => 500 + (Math.Abs(nationalId.GetHashCode()) % 1500)
-        };
-        if (income >= 100000) baseScore += 300;
-        else if (income >= 50000) baseScore += 200;
-        return baseScore;
+        int digitSum = nationalId.Sum(c => c - '0');
+        return 1 + ((digitSum * 137) % 1900);
     }
 
     private void LogWcfCall(string operationName, RequestBase request, ResponseBase response)

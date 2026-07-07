@@ -14,19 +14,23 @@
 - BDDK/TCMB regülatuar raporlama
 - PayCore outbox retry mekanizması
 - Web UI (ASP.NET Core MVC), WPF client, Console client
-- 60/83 test passing
+- 83/83 test passing ✅
+
+## In Progress 🔄
+- **Kart Yaşam Döngüsü**: Kayıp/Çalıntı, İptal, Yenileme, Yeniden Basım
+  - ✅ Adım 1: Contracts (Enum'lar, DTO'lar, Request/Response, ICardService)
+  - ✅ Adım 2: Veri Katmanı (SqliteMockProvider yeni kolonlar/tablo/SP'ler)
+  - ✅ Adım 3: CardMappers (ToCardDto + ToCardBlockHistoryDto)
+  - ⬜ FakePaycoreGateway tracker
+  - ⬜ CardService (CreateReplacementCard + 4 yeni operasyon + mevcut metot değişiklikleri)
+  - ⬜ REST + WCF + Controller
+  - ⬜ Web UI
+  - ⬜ Testler (CardLifecycleTests.cs, ~30 test)
+  - ⬜ Full build + test verification
 
 ## Known Issues ⚠️
-- 23 test failing: PayCore gateway entegrasyon testleri, maker-checker senaryoları (önceden mevcut)
-- `CardService.cs` ~1700 satır — God Class, ileride split edilmeli
+- `CardService.cs` ~1800 satır — God Class, ileride split edilmeli
 - PostgreSQL/Oracle migration script'leri güncellenmeli (yeni kolonlar için)
-- CardDto testlerde bazı alanlar nullable olarak geliyor (testler düzeltilmeli)
 
-## Test Coverage (60/83)
-- CardApplicationFlowTests: 17/23 passing
-- CardCreationTests: 8/11 passing
-- AuthorizationFlowTests: 3/8 passing
-- RbacTests: 4/5 passing
-- MakerCheckerLimitTests: 6/10 passing
-- TransactionTests: 4/6 passing
-- Diğerleri: 18/20 passing
+## Test Coverage (83/83) ✅
+- Tüm testler geçiyor (CardApplicationFlow, CardCreation, AuthorizationFlow, Rbac, MakerChecker, Transaction)

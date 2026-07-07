@@ -182,4 +182,36 @@ public interface ICardService
     [OperationContract]
     [FaultContract(typeof(BankingFault))]
     GetRegulatoryReportResponse GetRegulatoryReport(GetRegulatoryReportRequest request);
+
+    /// <summary>
+    /// Kayıp/çalıntı kart bildirimi: kart anında bloke edilir, aktif provizyonlar void edilir,
+    /// PayCore bilgilendirilir ve opsiyonel olarak yedek kart talebi oluşturulur.
+    /// </summary>
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    ReportLostStolenResponse ReportLostStolenCard(ReportLostStolenRequest request);
+
+    /// <summary>
+    /// Kartın kalıcı olarak iptal edilmesi: aktif provizyonlar void edilir, kart Cancelled
+    /// durumuna geçirilir ve PayCore bilgilendirilir.
+    /// </summary>
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    CancelCardResponse CancelCard(CancelCardRequest request);
+
+    /// <summary>
+    /// Kart yenileme: aynı PAN ile yeni expiry/CVV/EMV üretilir, yeni kart PendingActivation
+    /// durumunda oluşturulur; eski kart yeni kart aktive edilene kadar aktif kalır.
+    /// </summary>
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    RenewCardResponse RenewCard(RenewCardRequest request);
+
+    /// <summary>
+    /// Kart yeniden basım: fiziksel hasar, isim değişikliği, ürün upgrade/downgrade gibi
+    /// nedenlerle yeni kart oluşturulur; eski kart anında iptal edilir.
+    /// </summary>
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    ReissueCardResponse ReissueCard(ReissueCardRequest request);
 }
