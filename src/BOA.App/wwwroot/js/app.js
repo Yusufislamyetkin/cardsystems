@@ -62,7 +62,7 @@ document.addEventListener("DOMContentLoaded", () => {
 // YORDAM 1: Kartları Veritabanından Getirme
 async function fetchCards() {
     const listContainer = document.getElementById("card-list");
-    
+
     // Arama filtre kutularından değerleri alıyoruz
     const holderFilter = document.getElementById("filter-holder").value;
     const typeFilter = document.getElementById("filter-type").value;
@@ -230,7 +230,7 @@ async function updateStatus(event) {
         if (data.isSuccess) {
             showNotification(data.resultMessage, "success");
             closeModal("modal-status");
-            
+
             state.selectedCard = data.updatedCard;
             selectCard(cardId);
             fetchCards();
@@ -303,7 +303,7 @@ async function simulateTransaction(event) {
             showNotification(data.resultMessage, "success");
             closeModal("modal-transaction");
             document.getElementById("form-create-transaction").reset();
-            
+
             // Kart bakiyesini güncelle ve hareketleri yeniden çek
             state.selectedCard = data.updatedCard;
             selectCard(cardId);
@@ -420,7 +420,7 @@ function renderCardList() {
         const isSelected = card.cardId === state.selectedCardId ? "selected" : "";
         const typeBadge = card.cardType === 1 ? "Banka" : "Kredi";
         const statusText = CARD_STATUS_LABELS[card.status] || "Bilinmiyor";
-        
+
         const cardItem = document.createElement("div");
         cardItem.className = `list-card-item ${isSelected}`;
         cardItem.onclick = () => selectCard(card.cardId);
@@ -449,7 +449,7 @@ function renderCardList() {
 // Bir Kart Seçildiğinde Detay Panelini Günceller
 function selectCard(cardId) {
     state.selectedCardId = cardId;
-    
+
     // Seçili kart verisini state'ten buluyoruz
     const card = state.cards.find(c => c.cardId === cardId) || state.selectedCard;
     if (!card) return;
@@ -472,7 +472,7 @@ function selectCard(cardId) {
 
     numEl.innerText = maskCardNumberString(card.cardNumber);
     holderEl.innerText = card.cardHolderName;
-    
+
     // Son kullanma tarihini MM/YY formatına çevir
     const expDate = new Date(card.expiryDate);
     const month = String(expDate.getMonth() + 1).padStart(2, '0');
@@ -496,7 +496,7 @@ function selectCard(cardId) {
     // Finansal özet alanlarını doldur
     document.getElementById("detail-card-limit").innerText = `₺${card.cardLimit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}`;
     document.getElementById("detail-card-balance").innerText = `₺${card.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}`;
-    
+
     const balanceLabel = document.getElementById("detail-balance-label");
     balanceLabel.innerText = card.cardType === 2 ? "Kullanılabilir Limit:" : "Hesap Bakiyesi:";
 
@@ -509,8 +509,8 @@ function selectCard(cardId) {
     const statusEl = document.getElementById("detail-card-status");
     const statusText = card.status === 1 ? "Aktif"
         : card.status === 2 ? "Bloke (Geçici Kapalı)"
-        : card.status === 4 ? "Aktivasyon Bekliyor"
-        : "İptal (Kullanıma Kapalı)";
+            : card.status === 4 ? "Aktivasyon Bekliyor"
+                : "İptal (Kullanıma Kapalı)";
     statusEl.innerText = statusText;
     statusEl.className = `badge status-${card.status}`;
 
@@ -521,19 +521,32 @@ function selectCard(cardId) {
         activateBtn.classList.add("hidden");
     }
 
-    // Operasyon ikonlarını duruma göre uyarla (Eğer kart iptal ise işlem yapmayı kapat vb.)
-    const statusBtn = document.getElementById("btn-open-status-modal");
-    const statusIcon = document.getElementById("action-status-icon");
-    const statusTitle = document.getElementById("action-status-title");
+    // Operasyon butonlarını duruma göre göster/sakla
+    const btnLost = document.getElementById("btn-open-lost-stolen-modal");
+    const btnRenew = document.getElementById("btn-open-renew-modal");
+    const btnReissue = document.getElementById("btn-open-reissue-modal");
+    const btnCancel = document.getElementById("btn-open-cancel-modal");
 
-    if (card.status === 2) { // Bloke ise
-        statusIcon.className = "action-icon green";
-        statusIcon.innerHTML = '<i class="fa-solid fa-lock-open"></i>';
-        statusTitle.innerText = "Blokaj Kaldır";
-    } else {
-        statusIcon.className = "action-icon red";
-        statusIcon.innerHTML = '<i class="fa-solid fa-lock"></i>';
-        statusTitle.innerText = "Kartı Bloke Et";
+    if (card.status === 1) { // Active
+        if (btnLost) btnLost.classList.remove("hidden");
+        if (btnRenew) btnRenew.classList.remove("hidden");
+        if (btnReissue) btnReissue.classList.remove("hidden");
+        if (btnCancel) btnCancel.classList.remove("hidden");
+    } else if (card.status === 2) { // Blocked
+        if (btnLost) btnLost.classList.add("hidden");
+        if (btnRenew) btnRenew.classList.remove("hidden");
+        if (btnReissue) btnReissue.classList.remove("hidden");
+        if (btnCancel) btnCancel.classList.remove("hidden");
+    } else if (card.status === 4) { // PendingActivation
+        if (btnLost) btnLost.classList.add("hidden");
+        if (btnRenew) btnRenew.classList.add("hidden");
+        if (btnReissue) btnReissue.classList.add("hidden");
+        if (btnCancel) btnCancel.classList.add("hidden");
+    } else { // Cancelled
+        if (btnLost) btnLost.classList.add("hidden");
+        if (btnRenew) btnRenew.classList.add("hidden");
+        if (btnReissue) btnReissue.classList.add("hidden");
+        if (btnCancel) btnCancel.classList.add("hidden");
     }
 
     // Hareket geçmişini servisten çek
@@ -554,7 +567,7 @@ function renderTransactions(transactions) {
         const isExpense = t.transactionType === 1 || t.transactionType === 2 || t.transactionType === 4;
         const sign = isExpense ? "-" : "+";
         const amountClass = isExpense ? "expense" : "income";
-        
+
         const date = new Date(t.transactionDate);
         const dateStr = `${date.getDate()} ${getMonthName(date.getMonth())} ${date.getFullYear()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 
@@ -611,7 +624,7 @@ async function pollLogs() {
 // Log verilerini panel içerisine basıp otomatik en aşağı kaydırır
 function renderLogPanel(elementId, logs, type) {
     const panel = document.getElementById(elementId);
-    
+
     if (logs.length === 0) {
         panel.innerHTML = `<div class="log-placeholder">Bekleyen ${type} işlemi bulunmuyor...</div>`;
         return;
@@ -641,7 +654,7 @@ function renderLogPanel(elementId, logs, type) {
     // Eğer yeni içerik eklendiyse scroll'u en aşağıya taşı
     const isAtBottom = panel.scrollHeight - panel.clientHeight <= panel.scrollTop + 50;
     panel.innerHTML = formattedHtml;
-    
+
     if (isAtBottom || panel.scrollTop === 0) {
         panel.scrollTop = panel.scrollHeight;
     }
@@ -821,6 +834,82 @@ async function activateCard(event) {
 
 // Gün Sonu (EOD) Batch Sürecini Tetikleme — kredi kartları için ekstre kesimi, gecikme faizi,
 // otomatik blokaj ve kart yenileme işlemlerini çalıştırır. "CardOperationsAdmin" rolü gerektirir.
+// YORDAM: Kayıp/Çalıntı Bildirimi
+async function reportLostStolen(event) {
+    event.preventDefault();
+    if (!state.selectedCard) return;
+    const payload = {
+        CardId: state.selectedCard.cardId,
+        BlockReason: parseInt(document.getElementById("select-ls-reason").value),
+        Description: document.getElementById("input-ls-desc").value,
+        PoliceReportNumber: document.getElementById("input-ls-police").value || null,
+        RequestReplacement: document.getElementById("ls-request-replacement").checked,
+        Channel: "WEB_PORTAL", UserId: "YUSUF_BORA"
+    };
+    try {
+        const response = await fetch("/api/cards/report-lost-stolen", { method: "POST", headers: apiHeaders(), body: JSON.stringify(payload) });
+        const data = await response.json();
+        if (data.isSuccess) {
+            showNotification(data.resultMessage + (data.replacementCardId ? ` Yedek kart #${data.replacementCardId}` : ""), "success");
+            closeModal("modal-lost-stolen");
+            fetchCards();
+        } else { showNotification(data.errorMessage, "danger"); }
+    } catch { showNotification("İşlem başarısız!", "danger"); }
+}
+
+// YORDAM: Kart İptali
+async function cancelCard(event) {
+    event.preventDefault();
+    if (!state.selectedCard) return;
+    const payload = {
+        CardId: state.selectedCard.cardId,
+        CancellationReason: parseInt(document.getElementById("select-cancel-reason").value),
+        Description: document.getElementById("input-cancel-desc").value,
+        AcknowledgeOutstandingBalance: document.getElementById("cancel-acknowledge").checked,
+        Channel: "WEB_PORTAL", UserId: "YUSUF_BORA"
+    };
+    try {
+        const response = await fetch("/api/cards/cancel", { method: "POST", headers: apiHeaders("ADMIN"), body: JSON.stringify(payload) });
+        const data = await response.json();
+        if (data.isSuccess) { showNotification(data.resultMessage, "success"); closeModal("modal-cancel"); fetchCards(); selectCard(null); }
+        else { showNotification(data.errorMessage, "danger"); }
+    } catch { showNotification("İptal başarısız!", "danger"); }
+}
+
+// YORDAM: Kart Yenileme
+async function renewCard(event) {
+    event.preventDefault();
+    const cardId = parseInt(document.getElementById("renew-card-id").value);
+    try {
+        const response = await fetch("/api/cards/renew", { method: "POST", headers: apiHeaders(), body: JSON.stringify({ CardId: cardId, Channel: "WEB_PORTAL", UserId: "YUSUF_BORA" }) });
+        const data = await response.json();
+        if (data.isSuccess) { showNotification(data.resultMessage, "success"); closeModal("modal-renew"); fetchCards(); }
+        else { showNotification(data.errorMessage, "danger"); }
+    } catch { showNotification("Yenileme başarısız!", "danger"); }
+}
+
+// YORDAM: Yeniden Basım
+async function reissueCard(event) {
+    event.preventDefault();
+    if (!state.selectedCard) return;
+    const reason = parseInt(document.getElementById("select-reissue-reason").value);
+    const payload = {
+        CardId: state.selectedCard.cardId,
+        ReissueReason: reason,
+        NewCardHolderName: reason === 2 ? document.getElementById("input-reissue-name").value : null,
+        NewCardProduct: (reason === 3 || reason === 4) ? parseInt(document.getElementById("select-reissue-product").value) : null,
+        Description: document.getElementById("input-reissue-desc").value,
+        Channel: "WEB_PORTAL", UserId: "YUSUF_BORA"
+    };
+    try {
+        const response = await fetch("/api/cards/reissue", { method: "POST", headers: apiHeaders(), body: JSON.stringify(payload) });
+        const data = await response.json();
+        if (data.isSuccess) { showNotification(data.resultMessage, "success"); closeModal("modal-reissue"); fetchCards(); }
+        else { showNotification(data.errorMessage, "danger"); }
+    } catch { showNotification("Yeniden basım başarısız!", "danger"); }
+}
+
+// Gün Sonu (EOD) Batch
 async function runEodBatch() {
     const confirmed = confirm(
         "Gün sonu (EOD) batch süreci çalıştırılacak:\n" +
@@ -893,7 +982,7 @@ function registerEventHandlers() {
     // Modal açıcı butonlar
     document.getElementById("btn-open-create-modal").addEventListener("click", () => openModal("modal-create-card"));
     document.getElementById("btn-open-application-modal").addEventListener("click", () => openModal("applicationModal"));
-    
+
     document.getElementById("btn-open-limit-modal").addEventListener("click", () => {
         if (!state.selectedCard) return;
         document.getElementById("limit-card-id").value = state.selectedCard.cardId;
@@ -938,6 +1027,67 @@ function registerEventHandlers() {
         openModal("activateCardModal");
     });
 
+    // Kayıp/Çalıntı bildirimi butonu
+    const btnLostStolen = document.getElementById("btn-open-lost-stolen-modal");
+    if (btnLostStolen) btnLostStolen.addEventListener("click", () => {
+        if (!state.selectedCard) return;
+        document.getElementById("ls-card-id").value = state.selectedCard.cardId;
+        document.getElementById("ls-card-label").innerText = `${state.selectedCard.cardHolderName} (${maskCardNumberString(state.selectedCard.cardNumber)})`;
+        document.getElementById("input-ls-desc").value = "";
+        document.getElementById("input-ls-police").value = "";
+        document.getElementById("ls-request-replacement").checked = false;
+        openModal("modal-lost-stolen");
+    });
+
+    // Kart iptal butonu
+    const btnCancel = document.getElementById("btn-open-cancel-modal");
+    if (btnCancel) btnCancel.addEventListener("click", () => {
+        if (!state.selectedCard) return;
+        document.getElementById("cancel-card-id").value = state.selectedCard.cardId;
+        document.getElementById("cancel-card-label").innerText = `${state.selectedCard.cardHolderName} (${maskCardNumberString(state.selectedCard.cardNumber)})`;
+        document.getElementById("input-cancel-desc").value = "";
+        document.getElementById("cancel-acknowledge").checked = false;
+        openModal("modal-cancel");
+    });
+
+    // Kart yenileme butonu
+    const btnRenew = document.getElementById("btn-open-renew-modal");
+    if (btnRenew) btnRenew.addEventListener("click", () => {
+        if (!state.selectedCard) return;
+        document.getElementById("renew-card-id").value = state.selectedCard.cardId;
+        document.getElementById("renew-card-label").innerText = `${state.selectedCard.cardHolderName} (${maskCardNumberString(state.selectedCard.cardNumber)})`;
+        openModal("modal-renew");
+    });
+
+    // Yeniden basım butonu
+    const btnReissue = document.getElementById("btn-open-reissue-modal");
+    if (btnReissue) btnReissue.addEventListener("click", () => {
+        if (!state.selectedCard) return;
+        document.getElementById("reissue-card-id").value = state.selectedCard.cardId;
+        document.getElementById("reissue-card-label").innerText = `${state.selectedCard.cardHolderName} (${maskCardNumberString(state.selectedCard.cardNumber)})`;
+        document.getElementById("input-reissue-desc").value = "";
+        document.getElementById("input-reissue-name").value = "";
+        openModal("modal-reissue");
+    });
+
+    // Yeni form submit listener'ları
+    document.getElementById("form-lost-stolen").addEventListener("submit", reportLostStolen);
+    document.getElementById("form-cancel").addEventListener("submit", cancelCard);
+    document.getElementById("form-renew").addEventListener("submit", renewCard);
+    document.getElementById("form-reissue").addEventListener("submit", reissueCard);
+
+    // Lost/Stolen reason değiştiğinde police report zorunluluğu
+    document.getElementById("select-ls-reason").addEventListener("change", (e) => {
+        document.getElementById("ls-police-group").style.display = e.target.value === "2" ? "block" : "none";
+    });
+
+    // Reissue reason değiştiğinde ek alanları göster
+    document.getElementById("select-reissue-reason").addEventListener("change", (e) => {
+        const reason = parseInt(e.target.value);
+        document.getElementById("reissue-name-group").style.display = reason === 2 ? "block" : "none";
+        document.getElementById("reissue-product-group").style.display = (reason === 3 || reason === 4) ? "block" : "none";
+    });
+
     // Kapatma butonları ve modal dışına tıklama ile kapatma
     document.querySelectorAll(".modal-close, [data-modal]").forEach(el => {
         el.addEventListener("click", (e) => {
@@ -952,7 +1102,7 @@ function registerEventHandlers() {
         const val = e.target.value;
         const limitGroup = document.getElementById("limit-group");
         const balanceGroup = document.getElementById("balance-group");
-        
+
         if (val === "1") { // Debit
             limitGroup.style.display = "none";
             balanceGroup.style.display = "block";
@@ -994,12 +1144,12 @@ function showNotification(message, type = "success") {
     toast.style.display = "flex";
     toast.style.alignItems = "center";
     toast.style.gap = "0.5rem";
-    
+
     const icon = type === "success" ? "fa-circle-check" : "fa-circle-exclamation";
     toast.innerHTML = `<i class="fa-solid ${icon}"></i> <span>${message}</span>`;
-    
+
     document.body.appendChild(toast);
-    
+
     // 3.5 saniye sonra yok et
     setTimeout(() => {
         toast.style.opacity = "0";

@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="tr">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,12 +8,15 @@
     <!-- Google Fonts üzerinden Outfit ve Inter yazı tiplerini yüklüyoruz -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet">
     <!-- FontAwesome kütüphanesini ikonlar için ekliyoruz -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Özel CSS dosyamız -->
     <link rel="stylesheet" href="css/index.css">
 </head>
+
 <body>
 
     <!-- ÜST MENÜ (HEADER) -->
@@ -68,7 +72,7 @@
 
         <!-- 2. KISIM: KARTLAR VE DETAY PANELDEN OLUŞAN ÇİFT SÜTUN YAPI -->
         <div class="content-grid">
-            
+
             <!-- SOL SÜTUN: KART LİSTELEME VE FİLTRELEME -->
             <section class="card-list-section">
                 <div class="section-header">
@@ -113,12 +117,13 @@
                 <div class="no-selection-state" id="no-selection-msg">
                     <i class="fa-solid fa-hand-pointer"></i>
                     <h3>Detayları Görüntülemek İçin Bir Kart Seçin</h3>
-                    <p>Kart limit güncelleme, blokaj işlemleri ve hesap hareketleri seçtiğiniz kart üzerinden gerçekleştirilecektir.</p>
+                    <p>Kart limit güncelleme, blokaj işlemleri ve hesap hareketleri seçtiğiniz kart üzerinden
+                        gerçekleştirilecektir.</p>
                 </div>
 
                 <!-- Kart Seçildiğinde Görünecek Panel -->
                 <div class="details-wrapper hidden" id="details-content">
-                    
+
                     <!-- Görsel Plastik Kart Mockup -->
                     <div class="plastic-card-container">
                         <div class="plastic-card" id="visual-card">
@@ -154,11 +159,29 @@
                             <h4>Limit Güncelle</h4>
                             <p>Kart harcama limitini düzenle</p>
                         </button>
-                        <!-- Blokaj / Durum Değiştirme Butonu -->
-                        <button class="action-card" id="btn-open-status-modal">
-                            <div class="action-icon red" id="action-status-icon"><i class="fa-solid fa-ban"></i></div>
-                            <h4 id="action-status-title">Durum Değiştir</h4>
-                            <p id="action-status-desc">Kayıp/çalıntı veya blokaj işlemlerini yap</p>
+                        <!-- Kayıp/Çalıntı Bildirimi Butonu -->
+                        <button class="action-card hidden" id="btn-open-lost-stolen-modal">
+                            <div class="action-icon red"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                            <h4>Kayıp/Çalıntı Bildir</h4>
+                            <p>Acil bloke ve yedek kart talebi</p>
+                        </button>
+                        <!-- Kart Yenileme Butonu -->
+                        <button class="action-card hidden" id="btn-open-renew-modal">
+                            <div class="action-icon blue"><i class="fa-solid fa-rotate"></i></div>
+                            <h4>Kart Yenile</h4>
+                            <p>Yeni fiziksel kart basımı</p>
+                        </button>
+                        <!-- Yeniden Basım Butonu -->
+                        <button class="action-card hidden" id="btn-open-reissue-modal">
+                            <div class="action-icon orange"><i class="fa-solid fa-file-pen"></i></div>
+                            <h4>Yeniden Bas</h4>
+                            <p>Hasarlı/isim değişikliği/upgrade</p>
+                        </button>
+                        <!-- Kart İptal Butonu -->
+                        <button class="action-card hidden" id="btn-open-cancel-modal">
+                            <div class="action-icon red"><i class="fa-solid fa-xmark"></i></div>
+                            <h4>Kartı İptal Et</h4>
+                            <p>Kalıcı olarak kapat</p>
                         </button>
                         <!-- İşlem Simüle Et Butonu -->
                         <button class="action-card" id="btn-open-trans-modal">
@@ -240,9 +263,9 @@
                     </button>
                 </div>
             </div>
-            
+
             <div class="tracer-grid">
-                
+
                 <!-- SOL LOG PANELI: WCF SOAP BINDINGS -->
                 <div class="tracer-panel">
                     <div class="panel-title">
@@ -250,7 +273,8 @@
                         <span class="badge wcf-badge">BasicHttpBinding</span>
                     </div>
                     <div class="log-output code-font" id="wcf-log-output">
-                        <div class="log-placeholder">İşlem yapıldığında WCF SOAP istek ve yanıt XML paketleri burada görüntülenecektir...</div>
+                        <div class="log-placeholder">İşlem yapıldığında WCF SOAP istek ve yanıt XML paketleri burada
+                            görüntülenecektir...</div>
                     </div>
                 </div>
 
@@ -261,7 +285,8 @@
                         <span class="badge sql-badge">ADO.NET Execution</span>
                     </div>
                     <div class="log-output code-font" id="sql-log-output">
-                        <div class="log-placeholder">Veritabanında tetiklenen Stored Procedure parametre eşleşmeleri ve süreleri burada görüntülenecektir...</div>
+                        <div class="log-placeholder">Veritabanında tetiklenen Stored Procedure parametre eşleşmeleri ve
+                            süreleri burada görüntülenecektir...</div>
                     </div>
                 </div>
 
@@ -289,7 +314,8 @@
                     </div>
                     <div class="form-group">
                         <label for="input-national-id">Kart Sahibi T.C. Kimlik No</label>
-                        <input type="text" id="input-national-id" required maxlength="11" placeholder="Örn: 12345678901">
+                        <input type="text" id="input-national-id" required maxlength="11"
+                            placeholder="Örn: 12345678901">
                     </div>
                     <div class="form-group">
                         <label for="select-card-type">Kart Türü</label>
@@ -308,7 +334,8 @@
                     </div>
                     <div class="form-group">
                         <label for="input-card-pin">Kart Şifresi (PIN)</label>
-                        <input type="password" id="input-card-pin" maxlength="4" pattern="[0-9]{4}" value="1234" required>
+                        <input type="password" id="input-card-pin" maxlength="4" pattern="[0-9]{4}" value="1234"
+                            required>
                     </div>
                     <div class="form-actions">
                         <button type="button" class="btn btn-secondary" data-modal="modal-create-card">Vazgeç</button>
@@ -343,11 +370,172 @@
                     </div>
                     <div class="form-group">
                         <label for="input-limit-reason">Değişiklik Gerekçesi</label>
-                        <input type="text" id="input-limit-reason" placeholder="Müşteri talebi, risk kararı vb." required>
+                        <input type="text" id="input-limit-reason" placeholder="Müşteri talebi, risk kararı vb."
+                            required>
                     </div>
                     <div class="form-actions">
                         <button type="button" class="btn btn-secondary" data-modal="modal-limit">Kapat</button>
                         <button type="submit" class="btn btn-primary">Limiti Kaydet (SP_UPDATE_LIMIT)</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: KAYIP/ÇALINTI BİLDİRİMİ -->
+    <div class="modal" id="modal-lost-stolen">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-triangle-exclamation"></i> Kayıp/Çalıntı Kart Bildirimi</h3>
+                <span class="modal-close" data-modal="modal-lost-stolen">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="form-lost-stolen">
+                    <input type="hidden" id="ls-card-id">
+                    <div class="form-group">
+                        <label>Kart:</label>
+                        <p class="form-static-text" id="ls-card-label"></p>
+                    </div>
+                    <div class="form-group">
+                        <label for="select-ls-reason">Bloke Nedeni</label>
+                        <select id="select-ls-reason" required>
+                            <option value="1">Kayıp Kart</option>
+                            <option value="2">Çalıntı Kart</option>
+                            <option value="3">Fraud Şüphesi</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-ls-desc">Açıklama</label>
+                        <textarea id="input-ls-desc" required rows="2"></textarea>
+                    </div>
+                    <div class="form-group" id="ls-police-group" style="display:none">
+                        <label for="input-ls-police">Polis Tutanak No</label>
+                        <input type="text" id="input-ls-police">
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" id="ls-request-replacement"> Yedek kart talep et</label>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" data-modal="modal-lost-stolen">İptal</button>
+                        <button type="submit" class="btn btn-danger">ACİL BLOKE ET</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: KART İPTAL -->
+    <div class="modal" id="modal-cancel">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-xmark"></i> Kart İptali</h3>
+                <span class="modal-close" data-modal="modal-cancel">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="form-cancel">
+                    <input type="hidden" id="cancel-card-id">
+                    <div class="form-group">
+                        <label>Kart:</label>
+                        <p class="form-static-text" id="cancel-card-label"></p>
+                    </div>
+                    <div class="form-group">
+                        <label for="select-cancel-reason">İptal Nedeni</label>
+                        <select id="select-cancel-reason" required>
+                            <option value="1">Müşteri Talebi</option>
+                            <option value="2">Fraud Teyitli</option>
+                            <option value="3">Kart Sahibi Vefatı</option>
+                            <option value="4">Hesap Kapanışı</option>
+                            <option value="5">Borç Terkin</option>
+                            <option value="7">Banka Kararı</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-cancel-desc">Açıklama</label>
+                        <textarea id="input-cancel-desc" required rows="2"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" id="cancel-acknowledge"> Borç varsa kapatmayı onaylıyorum</label>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" data-modal="modal-cancel">Vazgeç</button>
+                        <button type="submit" class="btn btn-danger">KARTI KALICI OLARAK İPTAL ET</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: KART YENİLEME -->
+    <div class="modal" id="modal-renew">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-rotate"></i> Kart Yenileme</h3>
+                <span class="modal-close" data-modal="modal-renew">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="form-renew">
+                    <input type="hidden" id="renew-card-id">
+                    <div class="form-group">
+                        <label>Kart:</label>
+                        <p class="form-static-text" id="renew-card-label"></p>
+                    </div>
+                    <p style="color:#facc15; padding: 0.5rem 0;">Bu kart için yeni fiziksel kart basılacaktır. Yeni kart
+                        aktivasyon bekleyecek, mevcut kart aktif kalmaya devam edecektir.</p>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" data-modal="modal-renew">Vazgeç</button>
+                        <button type="submit" class="btn btn-primary">YENİ KART BAS</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: YENİDEN BASIM -->
+    <div class="modal" id="modal-reissue">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-file-pen"></i> Kart Yeniden Basım</h3>
+                <span class="modal-close" data-modal="modal-reissue">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="form-reissue">
+                    <input type="hidden" id="reissue-card-id">
+                    <div class="form-group">
+                        <label>Kart:</label>
+                        <p class="form-static-text" id="reissue-card-label"></p>
+                    </div>
+                    <div class="form-group">
+                        <label for="select-reissue-reason">Neden</label>
+                        <select id="select-reissue-reason" required>
+                            <option value="1">Fiziksel Hasar</option>
+                            <option value="2">İsim Değişikliği</option>
+                            <option value="3">Kart Yükseltme</option>
+                            <option value="4">Kart Düşürme</option>
+                            <option value="5">Çip Arızası</option>
+                            <option value="6">Güvenlik Endişesi</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="reissue-name-group" style="display:none">
+                        <label for="input-reissue-name">Yeni Ad Soyad</label>
+                        <input type="text" id="input-reissue-name">
+                    </div>
+                    <div class="form-group" id="reissue-product-group" style="display:none">
+                        <label for="select-reissue-product">Yeni Ürün</label>
+                        <select id="select-reissue-product">
+                            <option value="1">Classic</option>
+                            <option value="2">Gold</option>
+                            <option value="3">Platinum</option>
+                            <option value="4">Business</option>
+                            <option value="5">Premium</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-reissue-desc">Açıklama</label>
+                        <textarea id="input-reissue-desc" required rows="2"></textarea>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" data-modal="modal-reissue">Vazgeç</button>
+                        <button type="submit" class="btn btn-primary">YENİDEN BAS</button>
                     </div>
                 </form>
             </div>
@@ -378,7 +566,8 @@
                     </div>
                     <div class="form-group">
                         <label for="input-status-reason">İşlem Gerekçesi (Reason)</label>
-                        <input type="text" id="input-status-reason" required placeholder="Örn: Kayıp Çalıntı Bildirimi veya Müşteri Talebi">
+                        <input type="text" id="input-status-reason" required
+                            placeholder="Örn: Kayıp Çalıntı Bildirimi veya Müşteri Talebi">
                     </div>
                     <div class="form-actions">
                         <button type="button" class="btn btn-secondary" data-modal="modal-status">Kapat</button>
@@ -456,7 +645,8 @@
                     </div>
                     <div class="form-group">
                         <label for="input-trans-desc">İşlem Açıklaması</label>
-                        <input type="text" id="input-trans-desc" required placeholder="Örn: Market Alışverişi, Kira Yatırma vb.">
+                        <input type="text" id="input-trans-desc" required
+                            placeholder="Örn: Market Alışverişi, Kira Yatırma vb.">
                     </div>
                     <div class="form-group">
                         <label for="input-trans-pin">Kart Şifresi (PIN) — Alışveriş/ATM Çekim için zorunlu</label>
@@ -486,7 +676,8 @@
                     </div>
                     <div class="form-group">
                         <label for="input-app-tckn">T.C. Kimlik No</label>
-                        <input type="text" id="input-app-tckn" required maxlength="11" placeholder="11111111111 (yüksek skor) / 60000000000 (manuel)">
+                        <input type="text" id="input-app-tckn" required maxlength="11"
+                            placeholder="11111111111 (yüksek skor) / 60000000000 (manuel)">
                     </div>
                     <div class="form-group">
                         <label for="input-app-phone">Telefon</label>
@@ -528,7 +719,8 @@
                         <input type="text" id="input-decide-note" required placeholder="Onay/red gerekçesi">
                     </div>
                     <div class="form-actions">
-                        <button type="button" class="btn btn-secondary" data-modal="applicationDecideModal">Vazgeç</button>
+                        <button type="button" class="btn btn-secondary"
+                            data-modal="applicationDecideModal">Vazgeç</button>
                         <button type="button" class="btn btn-danger" id="btn-decide-reject">Reddet</button>
                         <button type="button" class="btn btn-primary" id="btn-decide-approve">Onayla</button>
                     </div>
@@ -567,4 +759,5 @@
     <!-- AJAX ve UI işlemleri için Javascript dosyamız -->
     <script src="js/app.js"></script>
 </body>
+
 </html>
