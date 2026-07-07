@@ -391,6 +391,7 @@ DECLARE
     v_status INT;
     v_limit DECIMAL(18,2);
     v_cur_balance DECIMAL(18,2);
+    v_held DECIMAL(18,2);
     v_new_entry_id INT;
 BEGIN
     -- 1. Kartı ve Hesabı kilitle (Pessimistic Lock)
@@ -409,6 +410,11 @@ BEGIN
     FROM boa_ledger_entries
     WHERE account_id = v_account_id;
 
+    -- 2b. Açık provizyonlardaki (hold) bloke tutarı
+    SELECT COALESCE(SUM(amount), 0.00) INTO v_held
+    FROM boa_authorizations
+    WHERE card_id = p_card_id AND status = 1;
+
     -- 3. Finansal Kontroller ve Çift Kayıt Muhasebe (Double-Entry Ledger) Kaydı Girişi
     -- Not: Ücret/Faiz (Fee, tip 4) banka tarafından zorlanan bir kayıttır; müşteri işlemi gibi
     -- bakiye/limit kontrolüne tabi değildir (gecikme faizi kartı limit üzerine taşıyabilir).
@@ -416,11 +422,10 @@ BEGIN
         -- A. Para Çıkışı / Harcama / Ücret: Kart hesabından BORÇ kaydı atılır.
         -- Bakiye Kontrolü (Debit Kartlar için) veya Limit Kontrolü (Kredi Kartları için)
         if p_transaction_type <> 4 then
-            -- Kredi kartlarında borç NEGATİF bakiye olarak tutulur; kullanılabilir limit = limit + bakiye'dir.
-            if v_card_type = 1 and (v_cur_balance < p_amount) then
-                RAISE EXCEPTION 'Hesap bakiyesi yetersiz! Kullanilabilir bakiye: % TL', v_cur_balance;
-            elsif v_card_type = 2 and ((v_limit + v_cur_balance) < p_amount) then
-                RAISE EXCEPTION 'Kart limiti yetersiz! Kullanilabilir limit: % TL', (v_limit + v_cur_balance);
+            if v_card_type = 1 and ((v_cur_balance - v_held) < p_amount) then
+                RAISE EXCEPTION 'Hesap bakiyesi yetersiz! Kullanilabilir bakiye: % TL', (v_cur_balance - v_held);
+            elsif v_card_type = 2 and ((v_limit + v_cur_balance - v_held) < p_amount) then
+                RAISE EXCEPTION 'Kart limiti yetersiz! Kullanilabilir limit: % TL', (v_limit + v_cur_balance - v_held);
             end if;
         end if;
 

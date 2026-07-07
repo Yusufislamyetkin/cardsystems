@@ -32,7 +32,7 @@ public class CardApiController : ControllerBase
     {
         // İstek yapan istemci IP adresini otomatik eşliyoruz
         request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
-        
+
         // Doğrudan WCF servis metodunu tetikliyoruz
         var response = _cardService.CreateCard(request);
         return Ok(response);
@@ -57,6 +57,28 @@ public class CardApiController : ControllerBase
     {
         request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
         var response = _cardService.UpdateCardLimit(request);
+        return Ok(response);
+    }
+
+    /// <summary>
+    /// Onay bekleyen bir limit artış talebini karara bağlayan (onay/red) JSON uç noktası.
+    /// </summary>
+    [HttpPost("decide-limit-change")]
+    public IActionResult DecideCardLimitChange([FromBody] DecideCardLimitChangeRequest request)
+    {
+        request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        var response = _cardService.DecideCardLimitChange(request);
+        return Ok(response);
+    }
+
+    /// <summary>
+    /// Limit artış taleplerini listeleyen JSON uç noktası.
+    /// </summary>
+    [HttpPost("limit-change-requests")]
+    public IActionResult GetLimitChangeRequests([FromBody] GetLimitChangeRequestsRequest request)
+    {
+        request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        var response = _cardService.GetLimitChangeRequests(request);
         return Ok(response);
     }
 
@@ -88,8 +110,10 @@ public class CardApiController : ControllerBase
     [HttpPost("create-transaction")]
     public IActionResult CreateTransaction([FromBody] CreateTransactionRequest request)
     {
+        // >>> ADIM 1: HTTP isteği buraya düşer (örn. kredi kartından 1000 TL'lik bir harcama).
+        // request.TransactionType = Purchase(1), request.Amount = 1000 olacak şekilde JSON gelir.
         request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
-        var response = _cardService.CreateTransaction(request);
+        var response = _cardService.CreateTransaction(request); // >>> ADIM 2'ye geçiliyor: CardService.CreateTransaction
         return Ok(response);
     }
 
@@ -157,6 +181,66 @@ public class CardApiController : ControllerBase
     {
         request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
         var response = _cardService.GetCardStatements(request);
+        return Ok(response);
+    }
+
+    /// <summary>
+    /// PayCore ile senkronu belirsiz kalmış işlemleri tarayıp yeniden deneyen mutabakat (reconciliation)
+    /// JSON uç noktası. Gerçek bir bankada periyodik bir job olarak çalışır; burada manuel tetiklenir.
+    /// </summary>
+    [HttpPost("retry-paycore-syncs")]
+    public IActionResult RetryPendingPaycoreSyncs([FromBody] RetryPendingPaycoreSyncsRequest request)
+    {
+        request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        var response = _cardService.RetryPendingPaycoreSyncs(request);
+        return Ok(response);
+    }
+
+    [HttpPost("applications/apply")]
+    public IActionResult ApplyForCreditCard([FromBody] ApplyForCreditCardRequest request)
+    {
+        request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        var response = _cardService.ApplyForCreditCard(request);
+        return Ok(response);
+    }
+
+    [HttpPost("applications/list")]
+    public IActionResult GetCardApplications([FromBody] GetCardApplicationsRequest request)
+    {
+        request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        var response = _cardService.GetCardApplications(request);
+        return Ok(response);
+    }
+
+    [HttpPost("applications/decide")]
+    public IActionResult DecideCardApplication([FromBody] DecideCardApplicationRequest request)
+    {
+        request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        var response = _cardService.DecideCardApplication(request);
+        return Ok(response);
+    }
+
+    [HttpPost("activate")]
+    public IActionResult ActivateCard([FromBody] ActivateCardRequest request)
+    {
+        request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        var response = _cardService.ActivateCard(request);
+        return Ok(response);
+    }
+
+    [HttpPost("deliver")]
+    public IActionResult DeliverCard([FromBody] DeliverCardRequest request)
+    {
+        request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        var response = _cardService.DeliverCard(request);
+        return Ok(response);
+    }
+
+    [HttpPost("regulatory-report")]
+    public IActionResult GetRegulatoryReport([FromBody] GetRegulatoryReportRequest request)
+    {
+        request.ClientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        var response = _cardService.GetRegulatoryReport(request);
         return Ok(response);
     }
 

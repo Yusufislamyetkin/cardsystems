@@ -1,0 +1,33 @@
+using System.Runtime.Serialization;
+using BOA.Common.Contracts.Base;
+
+namespace BOA.Common.Contracts.Requests;
+
+/// <summary>
+/// BDDK/TCMB regülatuar raporlaması için günlük/portföy özet raporu.
+/// daily_summary: başvuru/onay/red/basım sayıları (o gün).
+/// portfolio_risk: toplam kart sayısı, hacim, gecikme oranı.
+/// </summary>
+[DataContract]
+public class GetRegulatoryReportRequest : RequestBase
+{
+    [DataMember]
+    public string ReportType { get; set; } = "daily_summary";
+
+    [DataMember]
+    public DateTime? ReportDate { get; set; }
+}
+
+[DataContract]
+public class GetRegulatoryReportResponse : ResponseBase
+{
+    [DataMember]
+    public string ReportType { get; set; } = string.Empty;
+
+    [DataMember]
+    public string ReportDate { get; set; } = string.Empty;
+
+    /// <summary>JSON formatında rapor detayları — BDDK tablo yapısına uygun.</summary>
+    [DataMember]
+    public string ReportData { get; set; } = "{}";
+}

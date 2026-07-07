@@ -56,6 +56,12 @@ builder.Services.AddSingleton<DbManager>();
 // Singleton olsaydı ICurrentUserContext yalnızca ilk istekte enjekte edilir ve sonraki tüm
 // isteklerde aynı (yanlış) kullanıcı/rol bilgisi paylaşılırdı (captive dependency).
 builder.Services.AddScoped<ICurrentUserContext, CurrentUserContext>();
+
+// Dış kart işleme sağlayıcısı (PayCore) entegrasyon sınırı. Kendi ayrı veritabanını (paycore_mock.db)
+// kullandığı için Singleton — gerçek bir entegrasyonda bunun yerine bir HTTP istemcisi (IHttpClientFactory
+// ile) kaydedilirdi.
+builder.Services.AddSingleton<BOA.Services.Card.Paycore.IPaycoreGateway>(new BOA.Services.Card.Paycore.PaycoreMockGateway());
+
 builder.Services.AddScoped<CardService>();
 builder.Services.AddScoped<ICardService, CardService>();
 

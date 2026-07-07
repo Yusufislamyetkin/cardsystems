@@ -124,6 +124,31 @@ public class CardCreationTests
         Assert.Equal("VALIDATION_ERROR", fault.Detail.ErrorCode);
     }
 
+    [Fact]
+    public void CreateCard_ValidRequest_IsIssuedOnPaycoreAndReferenceIsLinked()
+    {
+        // Kart, bankanın kendi kaydı zaten oluştuktan SONRA PayCore'a (dış kart işleme sağlayıcısına)
+        // kaydediliyor; bu ikisi arasındaki tek bağ bu referans numarasıdır.
+        using var harness = new CardServiceTestHarness();
+
+        var response = harness.Service.CreateCard(ValidRequest());
+
+        Assert.True(response.IsSuccess);
+        Assert.False(string.IsNullOrWhiteSpace(response.CreatedCard.PaycoreReference));
+    }
+
+    [Fact]
+    public void CreateCard_DebitWithNonZeroLimit_ThrowsValidationFault()
+    {
+        // Debit kartlarda kredi limiti kavramı yoktur; bu kural önceden yalnızca web UI'de (app.js)
+        // uygulanıyordu ve doğrudan servise istek atan bir istemci tarafından bypass edilebilirdi.
+        using var harness = new CardServiceTestHarness();
+
+        var request = ValidRequest(cardType: CardType.Debit, limit: 5000);
+        var fault = Assert.Throws<FaultException<BankingFault>>(() => harness.Service.CreateCard(request));
+        Assert.Equal("VALIDATION_ERROR", fault.Detail.ErrorCode);
+    }
+
     private static bool IsValidLuhn(string number)
     {
         int sum = 0;

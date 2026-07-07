@@ -31,13 +31,30 @@ public interface ICardService
     GetCardListResponse GetCardList(GetCardListRequest request);
 
     /// <summary>
-    /// Belirtilen kartın limitini günceller.
+    /// Belirtilen kartın limitini günceller. Limit düşüşü anında uygulanır; limit artışı ise
+    /// maker-checker (çift onay) akışına girer ve yalnızca onay bekleyen bir talep oluşturur.
     /// </summary>
-    /// <param name="request">Kart ID ve yeni limit bilgileri</param>
-    /// <returns>Güncellenmiş kart bilgisi</returns>
+    /// <param name="request">Kart ID, yeni limit ve zorunlu gerekçe bilgileri</param>
+    /// <returns>Güncellenmiş kart bilgisi (artışlarda onay bekleyen talep bilgisiyle birlikte)</returns>
     [OperationContract]
     [FaultContract(typeof(BankingFault))]
     UpdateCardLimitResponse UpdateCardLimit(UpdateCardLimitRequest request);
+
+    /// <summary>
+    /// Onay bekleyen bir limit artış talebini karara bağlar (onay/red). Kararı veren kullanıcı,
+    /// talebi giren kullanıcı ile aynı olamaz (four-eyes principle). Onayda yeni limit karta
+    /// atomik olarak uygulanır ve PayCore tarafına senkronize edilir.
+    /// </summary>
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    DecideCardLimitChangeResponse DecideCardLimitChange(DecideCardLimitChangeRequest request);
+
+    /// <summary>
+    /// Limit artış taleplerini listeler (varsayılan olarak yalnızca onay bekleyenler).
+    /// </summary>
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    GetLimitChangeRequestsResponse GetLimitChangeRequests(GetLimitChangeRequestsRequest request);
 
     /// <summary>
     /// Kartın durumunu (Aktif, Bloke, İptal) günceller ve denetim loguna kaydeder.
@@ -115,4 +132,54 @@ public interface ICardService
     [OperationContract]
     [FaultContract(typeof(BankingFault))]
     GetCardStatementsResponse GetCardStatements(GetCardStatementsRequest request);
+
+    /// <summary>
+    /// PayCore ile senkronu belirsiz kalmış (ağ hatası nedeniyle ulaşılamamış veya süreç PayCore'u
+    /// aramadan önce çökmüş) işlemleri tarayıp yeniden dener — bkz. boa_paycore_outbox.
+    /// </summary>
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    RetryPendingPaycoreSyncsResponse RetryPendingPaycoreSyncs(RetryPendingPaycoreSyncsRequest request);
+
+    /// <summary>
+    /// Kredi kartı başvurusu girer; karar motoru (skor + BDDK tavanı) senkron çalışır.
+    /// </summary>
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    ApplyForCreditCardResponse ApplyForCreditCard(ApplyForCreditCardRequest request);
+
+    /// <summary>
+    /// Kredi kartı başvurularını listeler.
+    /// </summary>
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    GetCardApplicationsResponse GetCardApplications(GetCardApplicationsRequest request);
+
+    /// <summary>
+    /// Manuel değerlendirme kuyruğundaki bir başvuruyu onaylar veya reddeder (four-eyes).
+    /// </summary>
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    DecideCardApplicationResponse DecideCardApplication(DecideCardApplicationRequest request);
+
+    /// <summary>
+    /// Basılmış kartı TCKN doğrulaması ve müşteri PIN'i ile aktive eder.
+    /// </summary>
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    ActivateCardResponse ActivateCard(ActivateCardRequest request);
+
+    /// <summary>
+    /// Basılmış (InTransit) kartın müşteriye teslim edildiğini kaydeder; kart PendingActivation'a geçer.
+    /// </summary>
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    DeliverCardResponse DeliverCard(DeliverCardRequest request);
+
+    /// <summary>
+    /// BDDK/TCMB regülatuar raporlaması için günlük/portföy özeti döner.
+    /// </summary>
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    GetRegulatoryReportResponse GetRegulatoryReport(GetRegulatoryReportRequest request);
 }

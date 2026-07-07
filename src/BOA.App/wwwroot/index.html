@@ -94,6 +94,7 @@
                         <option value="1">Aktif</option>
                         <option value="2">Bloke</option>
                         <option value="3">İptal</option>
+                        <option value="4">Aktivasyon Bekliyor</option>
                     </select>
                 </div>
 
@@ -171,6 +172,11 @@
                             <h4>Provizyon Al</h4>
                             <p>Authorize → Capture/Void akışı</p>
                         </button>
+                        <button class="action-card hidden" id="btn-open-activate-modal">
+                            <div class="action-icon gold"><i class="fa-solid fa-key"></i></div>
+                            <h4>Aktive Et</h4>
+                            <p>TCKN + PIN ile kart aktivasyonu</p>
+                        </button>
                     </div>
 
                     <!-- Kart Finansal Durumu -->
@@ -204,6 +210,22 @@
                 </div>
             </section>
         </div>
+
+        <!-- 2b. KISIM: KART BAŞVURULARI -->
+        <section class="card-list-section" style="margin-bottom: 2rem;">
+            <div class="section-header">
+                <h2>Kart Başvuruları</h2>
+                <button class="btn btn-primary btn-sm" id="btn-open-application-modal">
+                    <i class="fa-solid fa-file-circle-plus"></i> Yeni Başvuru
+                </button>
+            </div>
+            <div class="card-list-wrapper" id="application-list" style="max-height: 320px;">
+                <div class="loading-state">
+                    <i class="fa-solid fa-circle-notch fa-spin"></i>
+                    <p>Başvurular Yükleniyor...</p>
+                </div>
+            </div>
+        </section>
 
         <!-- 3. KISIM: GERÇEK ZAMANLI WCF & SQL LOG TRACER PANELS (BOA ANATOMİSİ) -->
         <section class="tracer-section">
@@ -318,6 +340,10 @@
                     <div class="form-group">
                         <label for="input-new-limit">Yeni Tanımlanacak Limit (₺)</label>
                         <input type="number" id="input-new-limit" min="0" step="100" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-limit-reason">Değişiklik Gerekçesi</label>
+                        <input type="text" id="input-limit-reason" placeholder="Müşteri talebi, risk kararı vb." required>
                     </div>
                     <div class="form-actions">
                         <button type="button" class="btn btn-secondary" data-modal="modal-limit">Kapat</button>
@@ -439,6 +465,99 @@
                     <div class="form-actions">
                         <button type="button" class="btn btn-secondary" data-modal="modal-transaction">İptal</button>
                         <button type="submit" class="btn btn-primary">İşlemi Gönder (SP_CREATE_TRANSACTION)</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: KREDİ KARTI BAŞVURUSU -->
+    <div class="modal" id="applicationModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-file-circle-plus"></i> Yeni Kredi Kartı Başvurusu</h3>
+                <span class="modal-close" data-modal="applicationModal">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="form-application">
+                    <div class="form-group">
+                        <label for="input-app-name">Ad Soyad</label>
+                        <input type="text" id="input-app-name" required placeholder="Örn: AYŞE YILMAZ">
+                    </div>
+                    <div class="form-group">
+                        <label for="input-app-tckn">T.C. Kimlik No</label>
+                        <input type="text" id="input-app-tckn" required maxlength="11" placeholder="11111111111 (yüksek skor) / 60000000000 (manuel)">
+                    </div>
+                    <div class="form-group">
+                        <label for="input-app-phone">Telefon</label>
+                        <input type="text" id="input-app-phone" placeholder="05xx xxx xx xx">
+                    </div>
+                    <div class="form-group">
+                        <label for="input-app-income">Aylık Gelir (₺)</label>
+                        <input type="number" id="input-app-income" min="1" required value="50000">
+                    </div>
+                    <div class="form-group">
+                        <label for="input-app-limit">İstenen Limit (₺)</label>
+                        <input type="number" id="input-app-limit" min="1" required value="60000">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" data-modal="applicationModal">Vazgeç</button>
+                        <button type="submit" class="btn btn-primary">Başvuruyu Gönder</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: BAŞVURU KARARI (UNDERWRITER) -->
+    <div class="modal" id="applicationDecideModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-gavel"></i> Başvuru Kararı</h3>
+                <span class="modal-close" data-modal="applicationDecideModal">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="form-decide-application">
+                    <input type="hidden" id="decide-app-id">
+                    <div class="form-group">
+                        <label for="input-decide-limit">Onaylanan Limit (₺)</label>
+                        <input type="number" id="input-decide-limit" min="1" step="100">
+                    </div>
+                    <div class="form-group">
+                        <label for="input-decide-note">Karar Notu</label>
+                        <input type="text" id="input-decide-note" required placeholder="Onay/red gerekçesi">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" data-modal="applicationDecideModal">Vazgeç</button>
+                        <button type="button" class="btn btn-danger" id="btn-decide-reject">Reddet</button>
+                        <button type="button" class="btn btn-primary" id="btn-decide-approve">Onayla</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: KART AKTİVASYONU -->
+    <div class="modal" id="activateCardModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-key"></i> Kart Aktivasyonu</h3>
+                <span class="modal-close" data-modal="activateCardModal">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="form-activate-card">
+                    <input type="hidden" id="activate-card-id">
+                    <div class="form-group">
+                        <label for="input-activate-tckn">T.C. Kimlik No (doğrulama)</label>
+                        <input type="text" id="input-activate-tckn" required maxlength="11">
+                    </div>
+                    <div class="form-group">
+                        <label for="input-activate-pin">Yeni 4 Haneli PIN</label>
+                        <input type="password" id="input-activate-pin" maxlength="4" pattern="[0-9]{4}" required>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" data-modal="activateCardModal">Vazgeç</button>
+                        <button type="submit" class="btn btn-primary">Kartı Aktive Et</button>
                     </div>
                 </form>
             </div>

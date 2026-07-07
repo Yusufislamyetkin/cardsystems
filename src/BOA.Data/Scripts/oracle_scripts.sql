@@ -571,6 +571,7 @@ CREATE OR REPLACE PACKAGE BODY PKG_BOA_CARD AS
         v_status NUMBER(2);
         v_limit NUMBER(18,2);
         v_cur_balance NUMBER(18,2);
+        v_held NUMBER(18,2);
         v_new_entry_id NUMBER(10);
     BEGIN
         -- A. Kartı ve Hesabı kilitle (FOR UPDATE)
@@ -588,17 +589,21 @@ CREATE OR REPLACE PACKAGE BODY PKG_BOA_CARD AS
         FROM boa_ledger_entries
         WHERE account_id = v_account_id;
 
+        -- B2. Açık provizyonlardaki (hold) bloke tutarı
+        SELECT COALESCE(SUM(amount), 0.00) INTO v_held
+        FROM boa_authorizations
+        WHERE card_id = p_card_id AND status = 1;
+
         -- C. Finansal Kontroller ve Çift Kayıt Girişleri
         -- Not: Ücret/Faiz (Fee, tip 4) banka tarafından zorlanan bir kayıttır; müşteri işlemi gibi
         -- bakiye/limit kontrolüne tabi değildir (gecikme faizi kartı limit üzerine taşıyabilir).
         IF p_transaction_type = 1 OR p_transaction_type = 2 OR p_transaction_type = 4 THEN
             -- Banka Kartı Bakiye, Kredi Kartı Kullanılabilir Limit Kontrolü
             IF p_transaction_type <> 4 THEN
-                -- Kredi kartlarında borç NEGATİF bakiye olarak tutulur; kullanılabilir limit = limit + bakiye'dir.
-                IF v_card_type = 1 AND (v_cur_balance < p_amount) THEN
-                    raise_application_error(-20002, 'Hesap bakiyesi yetersiz! Kullanilabilir bakiye: ' || v_cur_balance || ' TL');
-                ELSIF v_card_type = 2 AND ((v_limit + v_cur_balance) < p_amount) THEN
-                    raise_application_error(-20003, 'Kart limiti yetersiz! Kullanilabilir limit: ' || (v_limit + v_cur_balance) || ' TL');
+                IF v_card_type = 1 AND ((v_cur_balance - v_held) < p_amount) THEN
+                    raise_application_error(-20002, 'Hesap bakiyesi yetersiz! Kullanilabilir bakiye: ' || (v_cur_balance - v_held) || ' TL');
+                ELSIF v_card_type = 2 AND ((v_limit + v_cur_balance - v_held) < p_amount) THEN
+                    raise_application_error(-20003, 'Kart limiti yetersiz! Kullanilabilir limit: ' || (v_limit + v_cur_balance - v_held) || ' TL');
                 END IF;
             END IF;
 

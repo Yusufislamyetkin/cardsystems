@@ -24,5 +24,17 @@ public enum CardStatus
     /// Kart kalıcı olarak iptal edilmiştir. Yeniden aktifleştirilemez.
     /// </summary>
     [EnumMember]
-    Cancelled = 3
+    Cancelled = 3,
+
+    /// <summary>
+    /// Kart basılmış/emboss edilmiş ancak henüz müşteri aktivasyonu yapılmamıştır; işleme kapalıdır.
+    /// </summary>
+    [EnumMember]
+    PendingActivation = 4,
+
+    /// <summary>
+    /// Kart basıldı, kargo/şube teslimatında. Müşteri henüz teslim almadı.
+    /// </summary>
+    [EnumMember]
+    InTransit = 5
 }

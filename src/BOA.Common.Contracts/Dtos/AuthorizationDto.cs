@@ -51,4 +51,11 @@ public class AuthorizationDto
 
     [DataMember]
     public DateTime CreatedDate { get; set; }
+
+    /// <summary>
+    /// Bu provizyonun PayCore tarafındaki karşılığının referansı (bankanın kendi onayından SONRA,
+    /// PayCore'a gönderilen provizyon isteği de onaylanırsa doldurulur).
+    /// </summary>
+    [DataMember]
+    public string? PaycoreAuthReference { get; set; }
 }

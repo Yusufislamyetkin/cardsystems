@@ -48,7 +48,9 @@ public class CardDto
     public CardStatus Status { get; set; }
 
     /// <summary>
-    /// Kartın tanımlı toplam limiti (Kredi kartları için harcama limiti, banka kartlarında günlük çekim limiti).
+    /// Kredi kartları için tanımlı toplam harcama (kredi) limiti. Banka kartlarında (Debit) kredi
+    /// limiti kavramı yoktur; bu alan her zaman 0'dır. Günlük nakit çekim limiti bundan ayrı bir
+    /// kuraldır ve işlem anında (tüm kart türleri için) ayrıca kontrol edilir.
     /// </summary>
     [DataMember]
     public decimal CardLimit { get; set; }
@@ -83,6 +85,13 @@ public class CardDto
     /// </summary>
     [DataMember]
     public string NationalId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Bu kartın PayCore (dış kart işleme sağlayıcısı) tarafındaki karşılık gelen referansı.
+    /// Bankanın kendi kart kaydı ile PayCore'daki kayıt arasındaki tek bağ budur.
+    /// </summary>
+    [DataMember]
+    public string? PaycoreReference { get; set; }
 
     /// <summary>
     /// Kart numarasını güvenlik standartlarına (PCI-DSS) uygun şekilde maskeleyerek döner.

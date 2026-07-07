@@ -35,6 +35,9 @@ public class DbManager
     /// </summary>
     public DataTable ExecuteReader(string spName, Dictionary<string, object> parameters)
     {
+        // >>> ADIM 10: DbManager sadece bir ara katman — zamanlama/loglama dışında iş kuralı YOK.
+        // Asıl mantık _dbProvider.ExecuteStoredProcedureReader içinde (aktif sağlayıcıya göre
+        // SqliteMockProvider/PostgresProvider/OracleProvider'dan biri).
         var stopwatch = Stopwatch.StartNew();
         try
         {

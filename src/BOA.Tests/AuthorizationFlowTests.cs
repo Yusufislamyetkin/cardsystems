@@ -44,10 +44,51 @@ public class AuthorizationFlowTests
         Assert.Equal(AuthorizationStatus.Authorized, auth.Authorization.Status);
         Assert.NotNull(auth.Authorization.AuthorizationCode);
         Assert.Equal(6, auth.Authorization.AuthorizationCode!.Length);
+        Assert.False(string.IsNullOrWhiteSpace(auth.Authorization.PaycoreAuthReference)); // Banka onayı sonrası PayCore'a da gönderilmiş olmalı
 
         var cardAfterAuth = harness.Service.GetCardList(new GetCardListRequest { Channel = "TEST" })
             .Cards.Single(c => c.CardId == cardId);
         Assert.Equal(1000, cardAfterAuth.Balance); // Hold, bakiyeyi etkilememeli
+    }
+
+    [Fact]
+    public void Authorize_BankApprovesButPaycoreDeclines_OverridesToDeclinedAndReleasesHold()
+    {
+        // Bankanın kendi limit kontrolü onaylayıp bir hold oluştursa bile, gerçek provizyon mesajı
+        // PayCore'da reddedilirse banka bu holdü geri almalı — aksi halde iki sistem arasında
+        // bankanın tarafında var olmayan bir bloke kalırdı.
+        var (harness, cardId) = CreateDebitCard(1000);
+        using var _ = harness;
+        harness.PaycoreGateway.ForceDeclineNextAuthorization = true;
+
+        var auth = harness.Service.AuthorizeTransaction(new AuthorizeTransactionRequest
+        {
+            CardId = cardId,
+            TransactionType = TransactionType.Purchase,
+            Amount = 200,
+            Description = "PayCore reddi",
+            Pin = "1234",
+            Channel = "TEST",
+            UserId = "test"
+        });
+
+        Assert.True(auth.IsSuccess); // Servis çağrısı başarılı; sonuç bir "red" olarak dönüyor (fault değil)
+        Assert.Equal(AuthorizationStatus.Declined, auth.Authorization!.Status);
+        Assert.Equal(AuthResponseCode.DoNotHonor, auth.Authorization.ResponseCode);
+        Assert.Null(auth.Authorization.AuthorizationCode);
+
+        // Hold geri alındığı için tam tutarında yeni bir provizyon alınabilmeli (PayCore tekrar onaylıyor).
+        var secondAuth = harness.Service.AuthorizeTransaction(new AuthorizeTransactionRequest
+        {
+            CardId = cardId,
+            TransactionType = TransactionType.Purchase,
+            Amount = 1000,
+            Description = "PayCore reddi sonrası tam tutar",
+            Pin = "1234",
+            Channel = "TEST",
+            UserId = "test"
+        });
+        Assert.Equal(AuthResponseCode.Approved, secondAuth.Authorization!.ResponseCode);
     }
 
     [Fact]

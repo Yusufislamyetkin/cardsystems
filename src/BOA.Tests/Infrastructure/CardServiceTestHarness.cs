@@ -22,6 +22,12 @@ public sealed class CardServiceTestHarness : IDisposable
     public CardService Service { get; }
 
     /// <summary>
+    /// Testlerin, bankanın kendi limit kontrolü onaylasa bile dış sistemin (PayCore) bir sonraki
+    /// provizyonu reddetmesini simüle edebilmesi için doğrudan eriştiği sahte gateway.
+    /// </summary>
+    public FakePaycoreGateway PaycoreGateway { get; } = new();
+
+    /// <summary>
     /// Testlerin (örn. EOD batch senaryolarında bir ekstrenin vade tarihini geçmişe almak için)
     /// veritabanına doğrudan erişebilmesi için bağlantı dizesi.
     /// </summary>
@@ -40,7 +46,7 @@ public sealed class CardServiceTestHarness : IDisposable
         _httpContext = new DefaultHttpContext();
         accessor.HttpContext = _httpContext;
 
-        Service = new CardService(dbManager, accessor, new CurrentUserContext());
+        Service = new CardService(dbManager, accessor, new CurrentUserContext(), PaycoreGateway);
         SetRole(TestRole.Teller);
     }
 

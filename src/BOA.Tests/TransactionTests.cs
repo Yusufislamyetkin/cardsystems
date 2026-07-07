@@ -85,6 +85,96 @@ public class TransactionTests
     }
 
     [Fact]
+    public void Purchase_BankApprovesButPaycoreDeclines_ReversesLedgerEntryAndThrowsFault()
+    {
+        // Gerçek bir kart ağında, bankanın kendi kontrolü onaylasa bile provizyon mesajı PayCore'da
+        // reddedilirse işlem kalıcılaşamaz. Ledger'a yazılan borç kaydı SİLİNMEZ (immutable), bunun
+        // yerine bir ters kayıt (Reversal) ile telafi edilir; bakiye orijinal haline geri döner.
+        var (harness, cardId) = CreateDebitCardWithBalance(1000);
+        using var _ = harness;
+        harness.PaycoreGateway.ForceDeclineNextAuthorization = true;
+
+        var fault = Assert.Throws<FaultException<BankingFault>>(() => harness.Service.CreateTransaction(new CreateTransactionRequest
+        {
+            CardId = cardId,
+            TransactionType = TransactionType.Purchase,
+            Amount = 400,
+            Description = "PayCore reddi",
+            Pin = "1234",
+            Channel = "TEST",
+            UserId = "test"
+        }));
+
+        Assert.Equal("PAYCORE_DECLINED", fault.Detail.ErrorCode);
+
+        var cardAfter = harness.Service.GetCardList(new GetCardListRequest { Channel = "TEST" })
+            .Cards.Single(c => c.CardId == cardId);
+        Assert.Equal(1000, cardAfter.Balance); // Ters kayıt sayesinde bakiye orijinal haline dönmüş olmalı
+    }
+
+    [Fact]
+    public void Purchase_PaycoreUnreachable_DoesNotReverseAndLeavesTransactionPendingReconciliation()
+    {
+        // PayCore'a ağ hatası/timeout nedeniyle ulaşılamazsa, PayCore'un GERÇEK kararı bilinmiyor.
+        // Bilerek ters kayıt YAZILMAZ (belki PayCore aslında onayladı, yanıt bize ulaşmadı) — ledger
+        // kaydı "askıda" (posted ama unconfirmed) kalır, çağırana PAYCORE_UNREACHABLE fault'u döner.
+        var (harness, cardId) = CreateDebitCardWithBalance(1000);
+        using var _ = harness;
+        harness.PaycoreGateway.ThrowOnNextAuthorization = true;
+
+        var fault = Assert.Throws<FaultException<BankingFault>>(() => harness.Service.CreateTransaction(new CreateTransactionRequest
+        {
+            CardId = cardId,
+            TransactionType = TransactionType.Purchase,
+            Amount = 400,
+            Description = "PayCore'a ulaşılamadı",
+            Pin = "1234",
+            Channel = "TEST",
+            UserId = "test"
+        }));
+
+        Assert.Equal("PAYCORE_UNREACHABLE", fault.Detail.ErrorCode);
+
+        var cardAfter = harness.Service.GetCardList(new GetCardListRequest { Channel = "TEST" })
+            .Cards.Single(c => c.CardId == cardId);
+        Assert.Equal(600, cardAfter.Balance); // Ters kayıt YAZILMADI — borç kaydı hâlâ duruyor (bilerek "askıda")
+    }
+
+    [Fact]
+    public void RetryPendingPaycoreSyncs_ConfirmsPreviouslyUnreachableTransaction()
+    {
+        // Az önceki senaryonun devamı: PayCore'a ulaşılamayan işlem, mutabakat taraması tekrar
+        // çalıştırıldığında (bu sefer PayCore normal cevap veriyor) Confirmed'e geçmelidir.
+        var (harness, cardId) = CreateDebitCardWithBalance(1000);
+        using var _ = harness;
+        harness.PaycoreGateway.ThrowOnNextAuthorization = true;
+
+        Assert.Throws<FaultException<BankingFault>>(() => harness.Service.CreateTransaction(new CreateTransactionRequest
+        {
+            CardId = cardId,
+            TransactionType = TransactionType.Purchase,
+            Amount = 400,
+            Description = "PayCore'a ulaşılamadı",
+            Pin = "1234",
+            Channel = "TEST",
+            UserId = "test"
+        }));
+
+        harness.SetRole(TestRole.Admin);
+        var retryResponse = harness.Service.RetryPendingPaycoreSyncs(new RetryPendingPaycoreSyncsRequest { Channel = "TEST", UserId = "admin" });
+
+        Assert.True(retryResponse.IsSuccess);
+        Assert.Equal(1, retryResponse.Confirmed);
+        Assert.Equal(0, retryResponse.Declined);
+        Assert.Equal(0, retryResponse.StillUnreachable);
+
+        harness.SetRole(TestRole.Teller);
+        var cardAfter = harness.Service.GetCardList(new GetCardListRequest { Channel = "TEST" })
+            .Cards.Single(c => c.CardId == cardId);
+        Assert.Equal(600, cardAfter.Balance); // Onaylandı — hâlâ borçlu, bu doğru; sadece artık PayCore ile senkron
+    }
+
+    [Fact]
     public void Fee_PostsAsDebitAndIncreasesDebt_RegardlessOfAvailableLimit()
     {
         // Regresyon: sp_boa_card_create_transaction, Fee (tip 4) için hiçbir dal eşleşmediğinden

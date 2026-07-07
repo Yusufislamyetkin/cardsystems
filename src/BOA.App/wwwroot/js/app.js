@@ -7,9 +7,28 @@
 
 // Uygulama Durum Yönetimi (State)
 const state = {
-    cards: [],            // Yüklenen tüm kartlar
-    selectedCardId: null, // Şu an seçili olan kartın ID'si
-    selectedCard: null    // Seçili kartın detay nesnesi
+    cards: [],
+    applications: [],
+    selectedCardId: null,
+    selectedCard: null,
+    pendingDecideApp: null
+};
+
+const CARD_STATUS_LABELS = {
+    1: "Aktif",
+    2: "Bloke",
+    3: "İptal",
+    4: "Aktivasyon Bekliyor"
+};
+
+const APPLICATION_STATUS_LABELS = {
+    1: { text: "Manuel İnceleme", cls: "status-2" },
+    2: { text: "Otomatik Onay", cls: "status-1" },
+    3: { text: "Onaylandı", cls: "status-1" },
+    4: { text: "Otomatik Red", cls: "status-3" },
+    5: { text: "Reddedildi", cls: "status-3" },
+    6: { text: "Basıldı", cls: "type-2" },
+    7: { text: "Zaman Aşımı", cls: "status-3" }
 };
 
 // Tüm /api/cards/* çağrılarında sunucunun ValidateSecurityHeader/CheckRole kontrolünden geçebilmek
@@ -27,6 +46,7 @@ function apiHeaders(role = "TELLER") {
 document.addEventListener("DOMContentLoaded", () => {
     // 1. Kartları veritabanından çek ve listele
     fetchCards();
+    fetchApplications();
 
     // 2. Olay Dinleyicilerini (Event Listeners) Kaydet
     registerEventHandlers();
@@ -133,11 +153,18 @@ async function updateLimit(event) {
 
     const cardId = parseInt(document.getElementById("limit-card-id").value);
     const newLimit = parseFloat(document.getElementById("input-new-limit").value);
+    const reason = document.getElementById("input-limit-reason").value.trim();
+
+    if (!reason) {
+        showNotification("Limit değişikliği için gerekçe girilmesi zorunludur!", "warning");
+        return;
+    }
 
     // BOA UpdateCardLimitRequest veri sözleşmesi nesnesi
     const requestPayload = {
         CardId: cardId,
         NewLimit: newLimit,
+        Reason: reason,
         Channel: "WEB_PORTAL",
         UserId: "YUSUF_BORA"
     };
@@ -152,9 +179,16 @@ async function updateLimit(event) {
         const data = await response.json();
 
         if (data.isSuccess) {
-            showNotification(data.resultMessage, "success");
+            let msgType = "success";
+            if (data.pendingRequest) {
+                msgType = "info";
+            }
+            if (data.isOverlimit) {
+                msgType = "warning";
+            }
+            showNotification(data.resultMessage, msgType);
             closeModal("modal-limit");
-            
+
             // Seçili kart verisini güncelle ve arayüzü yenile
             state.selectedCard = data.updatedCard;
             selectCard(cardId);
@@ -385,7 +419,7 @@ function renderCardList() {
     state.cards.forEach(card => {
         const isSelected = card.cardId === state.selectedCardId ? "selected" : "";
         const typeBadge = card.cardType === 1 ? "Banka" : "Kredi";
-        const statusText = card.status === 1 ? "Aktif" : card.status === 2 ? "Bloke" : "İptal";
+        const statusText = CARD_STATUS_LABELS[card.status] || "Bilinmiyor";
         
         const cardItem = document.createElement("div");
         cardItem.className = `list-card-item ${isSelected}`;
@@ -473,9 +507,19 @@ function selectCard(cardId) {
 
     // Kart durumu badges
     const statusEl = document.getElementById("detail-card-status");
-    const statusText = card.status === 1 ? "Aktif" : card.status === 2 ? "Bloke (Geçici Kapalı)" : "İptal (Kullanıma Kapalı)";
+    const statusText = card.status === 1 ? "Aktif"
+        : card.status === 2 ? "Bloke (Geçici Kapalı)"
+        : card.status === 4 ? "Aktivasyon Bekliyor"
+        : "İptal (Kullanıma Kapalı)";
     statusEl.innerText = statusText;
     statusEl.className = `badge status-${card.status}`;
+
+    const activateBtn = document.getElementById("btn-open-activate-modal");
+    if (card.status === 4) {
+        activateBtn.classList.remove("hidden");
+    } else {
+        activateBtn.classList.add("hidden");
+    }
 
     // Operasyon ikonlarını duruma göre uyarla (Eğer kart iptal ise işlem yapmayı kapat vb.)
     const statusBtn = document.getElementById("btn-open-status-modal");
@@ -603,6 +647,178 @@ function renderLogPanel(elementId, logs, type) {
     }
 }
 
+// Kart Başvurularını Getir
+async function fetchApplications() {
+    const listContainer = document.getElementById("application-list");
+    try {
+        const response = await fetch("/api/cards/applications/list", {
+            method: "POST",
+            headers: apiHeaders(),
+            body: JSON.stringify({ OnlyOpen: false, Channel: "WEB_PORTAL", UserId: "YUSUF_BORA" })
+        });
+        const data = await response.json();
+        if (data.isSuccess) {
+            state.applications = data.applications || [];
+            renderApplications();
+        } else if (listContainer) {
+            listContainer.innerHTML = `<p class="empty-state">${data.errorMessage}</p>`;
+        }
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+function renderApplications() {
+    const listContainer = document.getElementById("application-list");
+    if (!listContainer) return;
+    listContainer.innerHTML = "";
+
+    if (!state.applications.length) {
+        listContainer.innerHTML = '<p class="empty-state" style="padding:1rem;">Henüz başvuru yok.</p>';
+        return;
+    }
+
+    const table = document.createElement("table");
+    table.style.width = "100%";
+    table.style.fontSize = "0.75rem";
+    table.innerHTML = `
+        <thead><tr>
+            <th>ID</th><th>Ad</th><th>TCKN</th><th>Gelir</th><th>İstenen</th><th>Skor</th>
+            <th>Onay Limit</th><th>Durum</th><th>Maker</th><th>Tarih</th><th></th>
+        </tr></thead><tbody></tbody>`;
+    const tbody = table.querySelector("tbody");
+
+    state.applications.forEach(app => {
+        const st = APPLICATION_STATUS_LABELS[app.status] || { text: app.status, cls: "" };
+        const tr = document.createElement("tr");
+        const date = new Date(app.createdDate).toLocaleDateString("tr-TR");
+        let actions = "";
+        if (app.status === 1) {
+            actions = `<button class="btn btn-sm btn-primary" onclick="openDecideModal(${app.applicationId})">Karar</button>`;
+        }
+        tr.innerHTML = `
+            <td>${app.applicationId}</td>
+            <td>${app.applicantName}</td>
+            <td>${app.nationalId}</td>
+            <td>₺${app.declaredMonthlyIncome.toLocaleString("tr-TR")}</td>
+            <td>₺${app.requestedLimit.toLocaleString("tr-TR")}</td>
+            <td>${app.creditScore}</td>
+            <td>${app.approvedLimit != null ? "₺" + app.approvedLimit.toLocaleString("tr-TR") : "-"}</td>
+            <td><span class="badge ${st.cls}">${st.text}</span></td>
+            <td>${app.makerUserId}</td>
+            <td>${date}</td>
+            <td>${actions}</td>`;
+        tbody.appendChild(tr);
+    });
+    listContainer.appendChild(table);
+}
+
+async function submitApplication(event) {
+    event.preventDefault();
+    const payload = {
+        ApplicantName: document.getElementById("input-app-name").value,
+        NationalId: document.getElementById("input-app-tckn").value,
+        Phone: document.getElementById("input-app-phone").value || null,
+        DeclaredMonthlyIncome: parseFloat(document.getElementById("input-app-income").value),
+        RequestedLimit: parseFloat(document.getElementById("input-app-limit").value),
+        Channel: "WEB_PORTAL",
+        UserId: "YUSUF_BORA"
+    };
+    try {
+        const response = await fetch("/api/cards/applications/apply", {
+            method: "POST",
+            headers: apiHeaders(),
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (data.isSuccess) {
+            showNotification(data.resultMessage, "success");
+            closeModal("applicationModal");
+            document.getElementById("form-application").reset();
+            await fetchApplications();
+        } else {
+            showNotification(data.errorMessage, "danger");
+        }
+    } catch {
+        showNotification("Başvuru gönderilemedi!", "danger");
+    }
+}
+
+function openDecideModal(applicationId) {
+    const app = state.applications.find(a => a.applicationId === applicationId);
+    if (!app) return;
+    state.pendingDecideApp = app;
+    document.getElementById("decide-app-id").value = applicationId;
+    document.getElementById("input-decide-limit").value = Math.min(app.requestedLimit, app.bddkLimitCap);
+    document.getElementById("input-decide-note").value = "";
+    openModal("applicationDecideModal");
+}
+
+async function decideApplication(approve) {
+    const appId = parseInt(document.getElementById("decide-app-id").value);
+    const note = document.getElementById("input-decide-note").value.trim();
+    if (!note) {
+        showNotification("Karar notu zorunludur!", "warning");
+        return;
+    }
+    const payload = {
+        ApplicationId: appId,
+        Approve: approve,
+        ApprovedLimit: approve ? parseFloat(document.getElementById("input-decide-limit").value) : null,
+        DecisionNote: note,
+        Channel: "WEB_PORTAL",
+        UserId: "UNDERWRITER_ADMIN"
+    };
+    try {
+        const response = await fetch("/api/cards/applications/decide", {
+            method: "POST",
+            headers: apiHeaders("ADMIN"),
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (data.isSuccess) {
+            showNotification(data.resultMessage, "success");
+            closeModal("applicationDecideModal");
+            await fetchApplications();
+        } else {
+            showNotification(data.errorMessage, "danger");
+        }
+    } catch {
+        showNotification("Karar kaydedilemedi!", "danger");
+    }
+}
+
+async function activateCard(event) {
+    event.preventDefault();
+    if (!state.selectedCard) return;
+    const payload = {
+        CardId: state.selectedCard.cardId,
+        NationalId: document.getElementById("input-activate-tckn").value,
+        Pin: document.getElementById("input-activate-pin").value,
+        Channel: "WEB_PORTAL",
+        UserId: "YUSUF_BORA"
+    };
+    try {
+        const response = await fetch("/api/cards/activate", {
+            method: "POST",
+            headers: apiHeaders(),
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (data.isSuccess) {
+            showNotification(data.resultMessage, "success");
+            closeModal("activateCardModal");
+            state.selectedCard = data.activatedCard;
+            selectCard(data.activatedCard.cardId);
+            fetchCards();
+        } else {
+            showNotification(data.errorMessage, "danger");
+        }
+    } catch {
+        showNotification("Aktivasyon başarısız!", "danger");
+    }
+}
+
 // Gün Sonu (EOD) Batch Sürecini Tetikleme — kredi kartları için ekstre kesimi, gecikme faizi,
 // otomatik blokaj ve kart yenileme işlemlerini çalıştırır. "CardOperationsAdmin" rolü gerektirir.
 async function runEodBatch() {
@@ -611,7 +827,9 @@ async function runEodBatch() {
         "• Borcu olan kredi kartlarına yeni ekstre kesilecek\n" +
         "• Vadesi geçmiş ekstrelere gecikme faizi işlenecek\n" +
         "• 30 günü aşan gecikmelerde kart otomatik bloke edilecek\n" +
-        "• Son kullanma tarihi yaklaşan kartlar otomatik yenilenecek\n\n" +
+        "• Son kullanma tarihi yaklaşan kartlar otomatik yenilenecek\n" +
+        "• Onaylı başvurular basılacak (PendingActivation)\n" +
+        "• 30 günden eski manuel başvurular zaman aşımına uğrayacak\n\n" +
         "Devam edilsin mi?"
     );
     if (!confirmed) return;
@@ -627,6 +845,7 @@ async function runEodBatch() {
         if (data.isSuccess) {
             showNotification(data.resultMessage, "success");
             fetchCards();
+            fetchApplications();
         } else {
             showNotification("Batch hatası: " + data.errorMessage, "danger");
         }
@@ -662,6 +881,10 @@ function registerEventHandlers() {
     document.getElementById("form-update-status").addEventListener("submit", updateStatus);
     document.getElementById("form-create-transaction").addEventListener("submit", simulateTransaction);
     document.getElementById("form-authorize").addEventListener("submit", authorizeTransaction);
+    document.getElementById("form-application").addEventListener("submit", submitApplication);
+    document.getElementById("form-activate-card").addEventListener("submit", activateCard);
+    document.getElementById("btn-decide-approve").addEventListener("click", () => decideApplication(true));
+    document.getElementById("btn-decide-reject").addEventListener("click", () => decideApplication(false));
 
     // Log temizleme butonu
     document.getElementById("btn-clear-logs").addEventListener("click", clearTracerLogs);
@@ -669,6 +892,7 @@ function registerEventHandlers() {
 
     // Modal açıcı butonlar
     document.getElementById("btn-open-create-modal").addEventListener("click", () => openModal("modal-create-card"));
+    document.getElementById("btn-open-application-modal").addEventListener("click", () => openModal("applicationModal"));
     
     document.getElementById("btn-open-limit-modal").addEventListener("click", () => {
         if (!state.selectedCard) return;
@@ -704,6 +928,14 @@ function registerEventHandlers() {
         document.getElementById("input-auth-amount").value = 150;
         document.getElementById("input-auth-pin").value = "1234";
         openModal("modal-authorize");
+    });
+
+    document.getElementById("btn-open-activate-modal").addEventListener("click", () => {
+        if (!state.selectedCard) return;
+        document.getElementById("activate-card-id").value = state.selectedCard.cardId;
+        document.getElementById("input-activate-tckn").value = state.selectedCard.nationalId || "";
+        document.getElementById("input-activate-pin").value = "";
+        openModal("activateCardModal");
     });
 
     // Kapatma butonları ve modal dışına tıklama ile kapatma

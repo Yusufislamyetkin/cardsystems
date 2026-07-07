@@ -34,6 +34,10 @@ public enum AuthResponseCode
     [EnumMember]
     IncorrectPin = 55,
 
+    /// <summary>61 - Günlük Nakit Çekim Limiti Aşıldı (Exceeds Withdrawal Amount Limit)</summary>
+    [EnumMember]
+    ExceedsWithdrawalLimit = 61,
+
     /// <summary>96 - Sistem Hatası</summary>
     [EnumMember]
     SystemError = 96

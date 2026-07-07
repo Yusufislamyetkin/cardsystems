@@ -26,6 +26,14 @@ public interface ICardServiceClient
 
     [OperationContract]
     [FaultContract(typeof(BankingFault))]
+    DecideCardLimitChangeResponse DecideCardLimitChange(DecideCardLimitChangeRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    GetLimitChangeRequestsResponse GetLimitChangeRequests(GetLimitChangeRequestsRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
     SetCardStatusResponse SetCardStatus(SetCardStatusRequest request);
 
     [OperationContract]
@@ -59,4 +67,28 @@ public interface ICardServiceClient
     [OperationContract]
     [FaultContract(typeof(BankingFault))]
     GetCardStatementsResponse GetCardStatements(GetCardStatementsRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    ApplyForCreditCardResponse ApplyForCreditCard(ApplyForCreditCardRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    GetCardApplicationsResponse GetCardApplications(GetCardApplicationsRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    DecideCardApplicationResponse DecideCardApplication(DecideCardApplicationRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    ActivateCardResponse ActivateCard(ActivateCardRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    DeliverCardResponse DeliverCard(DeliverCardRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    GetRegulatoryReportResponse GetRegulatoryReport(GetRegulatoryReportRequest request);
 }
