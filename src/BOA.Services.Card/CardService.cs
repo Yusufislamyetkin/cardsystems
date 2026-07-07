@@ -214,6 +214,25 @@ public class CardService : ICardService
                 response.CreatedCard = CardMappers.ToCardDto(dt.Rows[0]);
                 response.IsSuccess = true;
                 response.ResultMessage = $"Kart ve GL Muhasebe Hesabı başarıyla açıldı. Maskeli No: {response.CreatedCard.MaskedCardNumber}";
+
+                // PayCore'a kart kaydı yap (dış kart işleme sağlayıcısı)
+                try
+                {
+                    var paycoreResult = _paycoreGateway.IssueCard(displayMaskedPan, request.CardHolderName, request.CardType);
+                    if (!string.IsNullOrWhiteSpace(paycoreResult.PaycoreCardReference))
+                    {
+                        _dbManager.ExecuteReader("sp_boa_card_set_paycore_reference", new Dictionary<string, object>
+                        {
+                            { "p_card_id", response.CreatedCard.CardId },
+                            { "p_paycore_reference", paycoreResult.PaycoreCardReference }
+                        });
+                        response.CreatedCard.PaycoreReference = paycoreResult.PaycoreCardReference;
+                    }
+                }
+                catch
+                {
+                    // PayCore çağrısı başarısız olsa bile kart oluşturma işlemi tamamlanmıştır
+                }
             }
             else
             {
@@ -1784,7 +1803,7 @@ public class CardService : ICardService
             "22222222222" => 1400,
             "33333333333" => 750,
             "50000000000" => 486,
-            "60000000000" => 623,
+            "60000000000" => 823,
             _ => 500 + (Math.Abs(nationalId.GetHashCode()) % 1500)
         };
         if (income >= 100000) baseScore += 300;
