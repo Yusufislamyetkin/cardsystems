@@ -20,9 +20,10 @@ dotnet test src/BOA.Tests/BOA.Tests.csproj
 ```
 
 ## Key Files by Size
-- `CardService.cs` — ~1700 lines (monolithic business logic)
-- `SqliteMockProvider.cs` — ~1900 lines (SQLite stored procedure simulation)
+- `CardService.cs` — ~2700 lines (monolithic business logic + kart yaşam döngüsü)
+- `SqliteMockProvider.cs` — ~2200 lines (SQLite stored procedure simulation)
 - `CardApplicationFlowTests.cs` — ~525 lines
+- `CardLifecycleTests.cs` — ~420 lines (20 yeni test)
 - `CardServiceTestHarness.cs` — ~80 lines (test infra)
 
 ## Technical Constraints
@@ -32,7 +33,7 @@ dotnet test src/BOA.Tests/BOA.Tests.csproj
 - RBAC: Mock JWT tokens (MOCK_JWT_ADMIN_TOKEN, MOCK_JWT_TELLER_TOKEN)
 - LF/CRLF line endings warning (Git for Windows)
 
-## Test Status (as of 2026-07-07)
-- 83 total tests
-- 83 passing ✅
-- 0 failing
+## Test Status (as of 2026-07-08)
+- 103 total tests
+- 101 passing ✅
+- 2 pre-existing failures (AuthorizationFlowTests — PayCore simülasyonu, kart değişiklikleriyle ilgili değil)
