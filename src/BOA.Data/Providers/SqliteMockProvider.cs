@@ -329,6 +329,18 @@ public class SqliteMockProvider : IBoaDbProvider
                 );";
             using (var cmd = new SqliteCommand(createNotificationsTable, connection)) { cmd.ExecuteNonQuery(); }
 
+            // 11. Limit Yönetimi — yeni tablolar
+            string createTempLimitsTable = @"CREATE TABLE IF NOT EXISTS boa_temporary_limits (temp_limit_id INTEGER PRIMARY KEY AUTOINCREMENT, card_id INTEGER NOT NULL, original_limit REAL NOT NULL, temporary_limit REAL NOT NULL, start_date TEXT NOT NULL, expiry_date TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, reason TEXT NOT NULL, created_by_user_id TEXT NOT NULL, created_date TEXT NOT NULL, reverted_date TEXT NULL, FOREIGN KEY(card_id) REFERENCES boa_cards(card_id));";
+            string createSpendingLimitsTable = @"CREATE TABLE IF NOT EXISTS boa_spending_limits (spending_limit_id INTEGER PRIMARY KEY AUTOINCREMENT, card_id INTEGER NOT NULL, limit_type INTEGER NOT NULL, limit_amount REAL NOT NULL, used_today REAL NOT NULL DEFAULT 0, used_this_month REAL NOT NULL DEFAULT 0, last_reset_date TEXT NOT NULL, FOREIGN KEY(card_id) REFERENCES boa_cards(card_id));";
+            string createInstallmentPlansTable = @"CREATE TABLE IF NOT EXISTS boa_installment_plans (plan_id INTEGER PRIMARY KEY AUTOINCREMENT, card_id INTEGER NOT NULL, total_amount REAL NOT NULL, installment_count INTEGER NOT NULL, installment_amount REAL NOT NULL, remaining_installments INTEGER NOT NULL, mcc TEXT NULL, merchant_id TEXT NULL, reference_number TEXT NOT NULL, created_date TEXT NOT NULL, FOREIGN KEY(card_id) REFERENCES boa_cards(card_id));";
+            string createMccRulesTable = @"CREATE TABLE IF NOT EXISTS boa_mcc_installment_rules (mcc_code TEXT PRIMARY KEY, mcc_description TEXT NOT NULL, max_installment_count INTEGER NOT NULL);";
+            using (var cmd = new SqliteCommand(createTempLimitsTable, connection)) { cmd.ExecuteNonQuery(); }
+            using (var cmd = new SqliteCommand(createSpendingLimitsTable, connection)) { cmd.ExecuteNonQuery(); }
+            using (var cmd = new SqliteCommand(createInstallmentPlansTable, connection)) { cmd.ExecuteNonQuery(); }
+            using (var cmd = new SqliteCommand(createMccRulesTable, connection)) { cmd.ExecuteNonQuery(); }
+            // MCC seed verileri
+            using (var cmd = new SqliteCommand(@"INSERT OR IGNORE INTO boa_mcc_installment_rules VALUES ('5411','Market',0),('5812','Restoran',0),('5944','Kuyumcu',4),('5732','Elektronik',12),('5712','Mobilya',24),('5311','Magaza',12),('6011','ATM Nakit',0),('0000','Varsayilan',12)", connection)) { cmd.ExecuteNonQuery(); }
+
             // Geliştiricinin diskinde bu değişiklikten ÖNCE oluşturulmuş bir boa_mock.db dosyası olabilir;
             // CREATE TABLE IF NOT EXISTS böyle bir durumda yeni kolonları eklemez. Var olan bir dosyada da
             // çalışabilmesi için eksik kolonları burada tamamlıyoruz (SQLite'ta "ADD COLUMN IF NOT EXISTS" yok).
@@ -347,6 +359,11 @@ public class SqliteMockProvider : IBoaDbProvider
             TryAddColumn(connection, "boa_cards", "cancellation_reason", "INTEGER NULL");
             TryAddColumn(connection, "boa_cards", "previous_card_id", "INTEGER NULL");
             TryAddColumn(connection, "boa_cards", "replaced_by_card_id", "INTEGER NULL");
+            TryAddColumn(connection, "boa_cards", "cash_advance_limit", "REAL NOT NULL DEFAULT 0.00");
+            TryAddColumn(connection, "boa_cards", "installment_limit", "REAL NOT NULL DEFAULT 0.00");
+            TryAddColumn(connection, "boa_cards", "daily_atm_limit", "REAL NOT NULL DEFAULT 5000.00");
+            TryAddColumn(connection, "boa_cards", "daily_pos_limit", "REAL NOT NULL DEFAULT 25000.00");
+            TryAddColumn(connection, "boa_cards", "monthly_spending_limit", "REAL NOT NULL DEFAULT 0.00");
         }
     }
 
@@ -1076,6 +1093,35 @@ public class SqliteMockProvider : IBoaDbProvider
                         {
                             LoadReaderIntoTable(dt, reader);
                         }
+                    }
+                    break;
+
+                case "sp_boa_spending_limit_get":
+                    {
+                        var cmd = new SqliteCommand("SELECT * FROM boa_spending_limits WHERE card_id = @cardId", connection);
+                        cmd.Parameters.AddWithValue("@cardId", parameters["p_card_id"]);
+                        using var reader = cmd.ExecuteReader();
+                        LoadReaderIntoTable(dt, reader);
+                    }
+                    break;
+
+                case "sp_boa_spending_limit_upsert":
+                    {
+                        int cardId = Convert.ToInt32(parameters["p_card_id"]);
+                        int limitType = Convert.ToInt32(parameters["p_limit_type"]);
+                        decimal amount = Convert.ToDecimal(parameters["p_limit_amount"]);
+                        string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                        using var cmd = new SqliteCommand(@"INSERT INTO boa_spending_limits (card_id, limit_type, limit_amount, used_today, used_this_month, last_reset_date)
+                            VALUES (@cardId, @type, @amount, 0, 0, @date)
+                            ON CONFLICT(card_id) DO UPDATE SET limit_amount=@amount, last_reset_date=@date WHERE limit_type=@type", connection);
+                        cmd.Parameters.AddWithValue("@cardId", cardId);
+                        cmd.Parameters.AddWithValue("@type", limitType);
+                        cmd.Parameters.AddWithValue("@amount", amount);
+                        cmd.Parameters.AddWithValue("@date", now);
+                        cmd.ExecuteNonQuery();
+                        dt.Columns.Add("result", typeof(string));
+                        dt.Rows.Add(dt.NewRow());
+                        dt.Rows[0]["result"] = "OK";
                     }
                     break;
 
