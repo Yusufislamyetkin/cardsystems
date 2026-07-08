@@ -140,6 +140,38 @@ internal static class CardMappers
         };
     }
 
+    public static SpendingLimitDto ToSpendingLimitDto(DataRow row)
+    {
+        return new SpendingLimitDto
+        {
+            SpendingLimitId = Convert.ToInt32(row["spending_limit_id"]),
+            CardId = Convert.ToInt32(row["card_id"]),
+            LimitType = (SpendingLimitType)Convert.ToInt32(row["limit_type"]),
+            LimitAmount = Convert.ToDecimal(row["limit_amount"]),
+            UsedToday = row.Table.Columns.Contains("used_today") ? Convert.ToDecimal(row["used_today"]) : 0,
+            UsedThisMonth = row.Table.Columns.Contains("used_this_month") ? Convert.ToDecimal(row["used_this_month"]) : 0,
+            LastResetDate = Convert.ToDateTime(row["last_reset_date"])
+        };
+    }
+
+    public static TemporaryLimitDto ToTemporaryLimitDto(DataRow row)
+    {
+        return new TemporaryLimitDto
+        {
+            TempLimitId = Convert.ToInt32(row["temp_limit_id"]),
+            CardId = Convert.ToInt32(row["card_id"]),
+            OriginalLimit = Convert.ToDecimal(row["original_limit"]),
+            TemporaryLimit = Convert.ToDecimal(row["temporary_limit"]),
+            StartDate = Convert.ToDateTime(row["start_date"]),
+            ExpiryDate = Convert.ToDateTime(row["expiry_date"]),
+            IsActive = Convert.ToBoolean(row["is_active"]),
+            Reason = row["reason"].ToString() ?? string.Empty,
+            CreatedByUserId = row["created_by_user_id"].ToString() ?? string.Empty,
+            CreatedDate = Convert.ToDateTime(row["created_date"]),
+            RevertedDate = row["reverted_date"] != DBNull.Value ? Convert.ToDateTime(row["reverted_date"]) : null
+        };
+    }
+
     public static StatementDto ToStatementDto(DataRow row)
     {
         return new StatementDto

@@ -1854,7 +1854,7 @@ public class CardService : ICardService
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var dbParams = new Dictionary<string, object> { { "p_only_pending", true } };
+            var dbParams = new Dictionary<string, object> { { "p_only_pending", request.OnlyPending } };
             if (request.CardId.HasValue) dbParams["p_card_id"] = request.CardId.Value;
             DataTable dt = _dbManager.ExecuteReader("sp_boa_limit_request_list", dbParams);
             foreach (DataRow row in dt.Rows)
@@ -2329,5 +2329,46 @@ public class CardService : ICardService
         catch (Exception ex) { response.IsSuccess = false; response.ErrorCode = "REISSUE_FAILED"; response.ErrorMessage = ex.Message; throw new FaultException<BankingFault>(new BankingFault { ErrorCode = response.ErrorCode, ErrorMessage = response.ErrorMessage, Severity = "Error" }, "Error"); }
         finally { stopwatch.Stop(); response.ExecutionTimeMs = stopwatch.ElapsedMilliseconds; LogWcfCall("ReissueCard", request, response); }
         return response;
+    }
+
+    public CreateTemporaryLimitIncreaseResponse CreateTemporaryLimitIncrease(CreateTemporaryLimitIncreaseRequest request)
+    {
+        CheckRole("CardOperationsAdmin");
+        throw new NotImplementedException("Geçici limit artışı — implementasyon devam ediyor.");
+    }
+
+    public RevertTemporaryLimitResponse RevertTemporaryLimit(RevertTemporaryLimitRequest request)
+    {
+        CheckRole("CardOperationsAdmin");
+        throw new NotImplementedException("Geçici limit geri dönüşü — implementasyon devam ediyor.");
+    }
+
+    public UpdateSpendingLimitResponse UpdateSpendingLimit(UpdateSpendingLimitRequest request)
+    {
+        CheckRole("CardOperationsAdmin");
+        throw new NotImplementedException("Harcama limiti güncelleme — implementasyon devam ediyor.");
+    }
+
+    public GetSpendingLimitsResponse GetSpendingLimits(GetSpendingLimitsRequest request)
+    {
+        CheckRole("BranchTeller");
+        var response = new GetSpendingLimitsResponse();
+        try
+        {
+            DataTable dt = _dbManager.ExecuteReader("sp_boa_spending_limit_get",
+                new Dictionary<string, object> { { "p_card_id", request.CardId } });
+            foreach (DataRow row in dt.Rows)
+                response.Limits.Add(CardMappers.ToSpendingLimitDto(row));
+            response.IsSuccess = true;
+            response.ResultMessage = $"{response.Limits.Count} adet harcama limiti listelendi.";
+        }
+        catch (Exception ex) { response.IsSuccess = false; response.ErrorCode = "SPENDING_LIMITS_FAILED"; response.ErrorMessage = ex.Message; }
+        return response;
+    }
+
+    public CreateInstallmentTransactionResponse CreateInstallmentTransaction(CreateInstallmentTransactionRequest request)
+    {
+        CheckRole("BranchTeller");
+        throw new NotImplementedException("Taksitli işlem — implementasyon devam ediyor.");
     }
 }

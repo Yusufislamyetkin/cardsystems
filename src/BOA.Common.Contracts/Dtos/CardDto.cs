@@ -197,6 +197,14 @@ public class CardDto
     /// </summary>
     public string ExpiryDisplay => ExpiryDate.ToString("MM/yy");
 
+    [DataMember] public decimal CashAdvanceLimit { get; set; }
+    [DataMember] public decimal InstallmentLimit { get; set; }
+    [DataMember] public decimal DailyAtmLimit { get; set; }
+    [DataMember] public decimal DailyPosLimit { get; set; }
+    [DataMember] public decimal MonthlySpendingLimit { get; set; }
+    [DataMember] public decimal? TemporaryLimitAmount { get; set; }
+    [DataMember] public DateTime? TemporaryLimitExpiry { get; set; }
+
     /// <summary>
     /// Kartın bloke edilme nedeni. Sadece status Blocked iken anlamlıdır.
     /// </summary>

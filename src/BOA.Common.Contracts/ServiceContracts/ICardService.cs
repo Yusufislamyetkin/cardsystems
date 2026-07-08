@@ -214,4 +214,24 @@ public interface ICardService
     [OperationContract]
     [FaultContract(typeof(BankingFault))]
     ReissueCardResponse ReissueCard(ReissueCardRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    CreateTemporaryLimitIncreaseResponse CreateTemporaryLimitIncrease(CreateTemporaryLimitIncreaseRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    RevertTemporaryLimitResponse RevertTemporaryLimit(RevertTemporaryLimitRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    UpdateSpendingLimitResponse UpdateSpendingLimit(UpdateSpendingLimitRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    GetSpendingLimitsResponse GetSpendingLimits(GetSpendingLimitsRequest request);
+
+    [OperationContract]
+    [FaultContract(typeof(BankingFault))]
+    CreateInstallmentTransactionResponse CreateInstallmentTransaction(CreateInstallmentTransactionRequest request);
 }

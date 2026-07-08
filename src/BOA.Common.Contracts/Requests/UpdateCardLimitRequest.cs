@@ -32,6 +32,8 @@ public class UpdateCardLimitRequest : RequestBase
     /// </summary>
     [DataMember]
     public string Reason { get; set; } = string.Empty;
+    [DataMember] public decimal? NewCashAdvanceLimit { get; set; }
+    [DataMember] public decimal? NewInstallmentLimit { get; set; }
 }
 
 /// <summary>
